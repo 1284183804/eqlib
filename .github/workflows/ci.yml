@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master, dev ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main, master, dev ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -17,7 +17,6 @@ jobs:
         cxx: [ g++, clang++ ]
     steps:
       - uses: actions/checkout@v4
-
       - name: Configure
         env:
           CXX: ${{ matrix.cxx }}
@@ -28,10 +27,8 @@ jobs:
             -DEQLIB_BUILD_SHARED=ON \
             -DEQLIB_BUILD_TESTS=ON \
             -DEQLIB_INSTALL=ON
-
       - name: Build
         run: cmake --build build --parallel
-
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
@@ -40,7 +37,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Configure
         run: |
           cmake -S . -B build \
@@ -49,10 +45,8 @@ jobs:
             -DEQLIB_BUILD_SHARED=ON \
             -DEQLIB_BUILD_TESTS=ON \
             -DEQLIB_INSTALL=ON
-
       - name: Build
         run: cmake --build build --parallel
-
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
@@ -61,7 +55,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Configure
         run: |
           cmake -S . -B build `
@@ -69,9 +62,7 @@ jobs:
             -DEQLIB_BUILD_SHARED=OFF `
             -DEQLIB_BUILD_TESTS=ON `
             -DEQLIB_INSTALL=ON
-
       - name: Build
         run: cmake --build build --config Release --parallel
-
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure

@@ -1,0 +1,66 @@
+#pragma once
+#include "gglx.h"
+#include "sejlbq.h"
+#include "csdl.h"
+
+namespace eqlib {
+
+struct DynBand {
+    Biquad<double> filter;
+    DynParams params;
+    FilterType type{FilterType::Peaking};
+    double freq_hz{1000.0};
+    double static_gain_db{0.0};
+    double q{0.707};
+    double envelope{0.0};
+    double current_gain_db{0.0};
+    double target_gain_db{0.0};
+    double last_applied_gain_db{0.0};
+    bool enable{true};
+    bool dirty{true};
+};
+
+class DynEqCore {
+    double m_sample_rate{48000.0};
+    int m_channels{2};
+    ParamQueue<64> m_param_queue;
+    DynBand m_bands[NUM_BANDS];
+    double m_smoothing_coeff{0.001};
+
+public:
+    DynEqCore();
+    void setSampleRate(double sr);
+    void setChannels(int ch);
+    void setBandType(int band, FilterType type);
+    void setBandFreq(int band, double freq_hz);
+    void setBandGain(int band, double gain_db);
+    void setBandQ(int band, double q);
+    void setBandEnable(int band, bool enable);
+    void setBandThreshold(int band, double threshold_db);
+    void setBandRatio(int band, double ratio);
+    void setBandAttack(int band, double attack_ms);
+    void setBandRelease(int band, double release_ms);
+    void setBandRange(int band, double range_db);
+    void setBandMode(int band, DynMode mode);
+    void reset();
+    void consumeParamQueue();
+    double processSample(double input);
+    double processSampleWithSidechain(double input, double sidechain);
+    void processBlock(const double* input, double* output, int frames, int channels);
+    void processBlockFloat(const float* input, float* output, int frames, int channels);
+    void processBlockWithSidechain(const double* input, const double* sidechain, double* output, int frames, int channels);
+    void processBlockWithSidechainFloat(const float* input, const float* sidechain, float* output, int frames, int channels);
+    double getBandGain(int band) const;
+    double getBandThreshold(int band) const;
+    double getBandRatio(int band) const;
+    FilterType getBandType(int band) const;
+    double getBandFreq(int band) const;
+    double getBandQ(int band) const;
+    bool getBandEnable(int band) const;
+    DynMode getBandMode(int band) const;
+    double getBandRange(int band) const;
+    double getBandAttack(int band) const;
+    double getBandRelease(int band) const;
+};
+
+}

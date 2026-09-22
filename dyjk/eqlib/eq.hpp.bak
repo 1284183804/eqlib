@@ -1,0 +1,72 @@
+#pragma once
+#include "eqlib.h"
+#include <memory>
+
+namespace eqlib {
+
+class EQ {
+public:
+    EQ();
+    explicit EQ(double sample_rate, int channels = 2);
+    ~EQ();
+    EQ(const EQ&) = delete;
+    EQ& operator=(const EQ&) = delete;
+    EQ(EQ&&) noexcept;
+    EQ& operator=(EQ&&) noexcept;
+
+    bool isValid() const;
+    int getLastError() const;
+
+    void setSampleRate(double sr);
+    double getSampleRate() const;
+    void setChannels(int ch);
+    int getChannels() const;
+    void reset();
+
+    void setBandType(int band, int type);
+    void setBandFreq(int band, double freq_hz);
+    void setBandGain(int band, double gain_db);
+    void setBandQ(int band, double q);
+    void setBandEnable(int band, bool enable);
+    int getBandType(int band) const;
+    double getBandFreq(int band) const;
+    double getBandGain(int band) const;
+    double getBandQ(int band) const;
+    bool getBandEnable(int band) const;
+
+    void setDynThreshold(int band, double threshold_db);
+    void setDynRatio(int band, double ratio);
+    void setDynAttack(int band, double attack_ms);
+    void setDynRelease(int band, double release_ms);
+    void setDynRange(int band, double range_db);
+    void setDynMode(int band, int mode);
+
+    void setSatType(int type);
+    void setSatDrive(double drive_db);
+    void setSatMix(double mix);
+    void setSatOutput(double output_db);
+
+    void setAgcTarget(double target_dbfs);
+    void setAgcAttack(double attack_ms);
+    void setAgcRelease(double release_ms);
+    void setAgcMaxBoost(double max_boost_db);
+    void setAgcMaxCut(double max_cut_db);
+
+    void setLinearKernelSize(int size);
+    int getLinearKernelSize() const;
+    int getLatency() const;
+    void setBandPhaseMode(int band, int mode);
+
+    void process(float* data, int frames);
+    void processDouble(double* data, int frames);
+
+    void processFile(const char* input_path, const char* output_path, int output_format);
+
+    const char* getVersion() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+
+}

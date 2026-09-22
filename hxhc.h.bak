@@ -1,0 +1,104 @@
+#pragma once
+#include "yyh.h"
+#include <cstddef>
+#include <vector>
+
+namespace eqlib {
+
+template<typename T>
+class RingBuffer {
+public:
+    RingBuffer() = default;
+    explicit RingBuffer(std::size_t capacity);
+    ~RingBuffer();
+    RingBuffer(const RingBuffer&) = delete;
+    RingBuffer& operator=(const RingBuffer&) = delete;
+    RingBuffer(RingBuffer&& other) noexcept;
+    RingBuffer& operator=(RingBuffer&& other) noexcept;
+
+    void setCapacity(std::size_t capacity);
+    std::size_t getCapacity() const;
+    std::size_t getReadable() const;
+    std::size_t getWritable() const;
+    void clear();
+
+    std::size_t write(const T* data, std::size_t count);
+    std::size_t read(T* out, std::size_t count);
+    std::size_t peek(T* out, std::size_t count) const;
+    std::size_t skip(std::size_t count);
+
+private:
+    T* m_buffer{nullptr};
+    std::size_t m_capacity{0};
+    std::size_t m_read{0};
+    std::size_t m_write{0};
+    std::size_t m_available{0};
+};
+
+class EQLIB_API StreamBuffer {
+public:
+    StreamBuffer();
+    StreamBuffer(int block_size, int channels);
+    ~StreamBuffer();
+    StreamBuffer(const StreamBuffer&) = delete;
+    StreamBuffer& operator=(const StreamBuffer&) = delete;
+    StreamBuffer(StreamBuffer&&) = delete;
+    StreamBuffer& operator=(StreamBuffer&&) = delete;
+
+    void setBlockSize(int size);
+    void setChannels(int ch);
+    int getBlockSize() const;
+    int getChannels() const;
+    void setCapacityFrames(int frames);
+    int getCapacityFrames() const;
+
+    void clear();
+    std::size_t pushInput(const float* data, std::size_t frames);
+    std::size_t pushInputDouble(const double* data, std::size_t frames);
+    std::size_t popOutput(float* data, std::size_t frames);
+    std::size_t popOutputDouble(double* data, std::size_t frames);
+    std::size_t getInputAvailable() const;
+    std::size_t getOutputAvailable() const;
+
+    template<typename Processor>
+    std::size_t process(Processor&& proc) {
+        std::size_t processed = 0;
+        const std::size_t need = static_cast<std::size_t>(m_block_size) * static_cast<std::size_t>(m_channels);
+        while (m_input.getReadable() >= need) {
+            m_input.read(m_block.data(), need);
+            proc(m_block.data(), m_block.data(), m_block_size, m_channels);
+            m_output.write(m_block.data(), need);
+            processed += static_cast<std::size_t>(m_block_size);
+        }
+        return processed;
+    }
+
+    template<typename Processor>
+    std::size_t processDouble(Processor&& proc) {
+        std::size_t processed = 0;
+        const std::size_t need = static_cast<std::size_t>(m_block_size) * static_cast<std::size_t>(m_channels);
+        while (m_input_d.getReadable() >= need) {
+            m_input_d.read(m_block_d.data(), need);
+            proc(m_block_d.data(), m_block_d.data(), m_block_size, m_channels);
+            m_output_d.write(m_block_d.data(), need);
+            processed += static_cast<std::size_t>(m_block_size);
+        }
+        return processed;
+    }
+
+private:
+    RingBuffer<float> m_input;
+    RingBuffer<float> m_output;
+    RingBuffer<double> m_input_d;
+    RingBuffer<double> m_output_d;
+    std::vector<float> m_block;
+    std::vector<double> m_block_d;
+    int m_block_size{512};
+    int m_channels{2};
+    int m_capacity_frames{8192};
+};
+
+extern template class RingBuffer<float>;
+extern template class RingBuffer<double>;
+
+}

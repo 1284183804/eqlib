@@ -134,6 +134,9 @@ if(EQLIB_BUILD_TESTS)
         cs_eq
         cs_dwjk
         cs_stereo
+        cs_resample
+        cs_wav_roundtrip
+        cs_curve
     )
 
     foreach(test_name ${EQLIB_TEST_NAMES})

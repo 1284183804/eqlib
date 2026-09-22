@@ -106,13 +106,14 @@ void wav_write_canonical_header(uint8_t* out44, int sample_rate,
                        * static_cast<uint32_t>(channels)
                        * static_cast<uint32_t>(bytes_per_sample);
     uint16_t block_align = static_cast<uint16_t>(channels * bytes_per_sample);
+    uint16_t audio_format = (bits_per_sample == 32) ? 3 : 1;
 
     std::memcpy(out44, "RIFF", 4);
     wav_write_u32_le(out44 + 4, 0);
     std::memcpy(out44 + 8, "WAVE", 4);
     std::memcpy(out44 + 12, "fmt ", 4);
     wav_write_u32_le(out44 + 16, 16);
-    wav_write_u16_le(out44 + 20, 3);
+    wav_write_u16_le(out44 + 20, audio_format);
     wav_write_u16_le(out44 + 22, static_cast<uint16_t>(channels));
     wav_write_u32_le(out44 + 24, static_cast<uint32_t>(sample_rate));
     wav_write_u32_le(out44 + 28, byte_rate);

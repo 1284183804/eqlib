@@ -4,20 +4,33 @@ namespace eqlib {
 
 MultiChannelProcessor::MultiChannelProcessor() {
     m_config.num_threads = 0;
-    startWorkersLocked();
+    unsigned int hw = std::thread::hardware_concurrency();
+    int initial = (hw == 0) ? 1 : static_cast<int>(hw);
+    if (initial > 8) initial = 8;
+    if (initial < 1) initial = 1;
+    startWorkersLocked(initial);
 }
 
 MultiChannelProcessor::~MultiChannelProcessor() {
     stopWorkersLocked();
 }
 
-void MultiChannelProcessor::startWorkersLocked() {
-    unsigned int hw = std::thread::hardware_concurrency();
-    int n = (hw == 0) ? 1 : static_cast<int>(hw);
-    if (n > 8) n = 8;
+void MultiChannelProcessor::startWorkersLocked(int n) {
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
+    if (n < 1) n = 1;
     m_workers.reserve(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
-        m_workers.emplace_back([this, i]() { workerLoop(i); });
+        uint64_t gen = m_generation;
+        m_workers.emplace_back([this, i, gen]() { workerLoop(i, gen); });
+    }
+}
+
+void MultiChannelProcessor::ensureWorkersLocked(int n) {
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
+    while (static_cast<int>(m_workers.size()) < n) {
+        int idx = static_cast<int>(m_workers.size());
+        uint64_t gen = m_generation;
+        m_workers.emplace_back([this, idx, gen]() { workerLoop(idx, gen); });
     }
 }
 
@@ -33,8 +46,8 @@ void MultiChannelProcessor::stopWorkersLocked() {
     m_workers.clear();
 }
 
-void MultiChannelProcessor::workerLoop(int worker_index) {
-    uint64_t last_gen = 0;
+void MultiChannelProcessor::workerLoop(int worker_index, uint64_t initial_generation) {
+    uint64_t last_gen = initial_generation;
     while (true) {
         std::function<void(int, int)> job;
         int start = 0;
@@ -68,11 +81,15 @@ void MultiChannelProcessor::workerLoop(int worker_index) {
 
 int MultiChannelProcessor::computeEffectiveThreadsLocked() const {
     if (!m_config.enable_multithread) return 1;
-    if (m_config.num_threads > 0) return m_config.num_threads;
+    if (m_config.num_threads > 0) {
+        int n = m_config.num_threads;
+        if (n > MAX_WORKERS) n = MAX_WORKERS;
+        return n;
+    }
     unsigned int hw = std::thread::hardware_concurrency();
     if (hw == 0) return 1;
     int n = static_cast<int>(hw);
-    if (n > 8) n = 8;
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
     return n;
 }
 
@@ -101,8 +118,12 @@ void MultiChannelProcessor::setBlockSize(int size) {
 
 void MultiChannelProcessor::setNumThreads(int n) {
     if (n < 0) n = 0;
+    if (n > MAX_WORKERS) n = MAX_WORKERS;
     std::lock_guard<std::mutex> lock(m_mutex);
     m_config.num_threads = n;
+    if (n > static_cast<int>(m_workers.size())) {
+        ensureWorkersLocked(n);
+    }
 }
 
 void MultiChannelProcessor::setEnableMultithread(bool enable) {
@@ -133,6 +154,16 @@ bool MultiChannelProcessor::getEnableMultithread() const {
 int MultiChannelProcessor::getEffectiveThreads() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return computeEffectiveThreadsLocked();
+}
+
+int MultiChannelProcessor::getHardwareThreads() const {
+    unsigned int hw = std::thread::hardware_concurrency();
+    return (hw == 0) ? 1 : static_cast<int>(hw);
+}
+
+int MultiChannelProcessor::getPoolSize() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return static_cast<int>(m_workers.size());
 }
 
 void MultiChannelProcessor::reset() {

@@ -20,11 +20,12 @@ int main() {
     std::printf("running=%d\n", aeq.isRunning() ? 1 : 0);
 
     eqlib::SpectrumFrame frame;
-    frame.num_bins = 1025;
     frame.sample_rate = 48000.0;
+    frame.resize(1025);
     for (int i = 0; i < frame.num_bins; ++i) {
-        frame.freqs_hz[i] = static_cast<double>(i) * 48000.0 / 2048.0;
-        frame.magnitudes[i] = 0.01;
+        frame.freqs_hz[static_cast<std::size_t>(i)] =
+            static_cast<double>(i) * 48000.0 / 2048.0;
+        frame.magnitudes[static_cast<std::size_t>(i)] = 0.01;
     }
     aeq.feedSpectrum(frame);
     bool computed = aeq.computeResult();

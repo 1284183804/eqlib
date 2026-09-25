@@ -165,10 +165,14 @@ EQLIB_API int dsjhq_process_double(eqlib_handle* h, const double* in, double* ou
 
 EQLIB_API int dtjhq_set_band_threshold(eqlib_handle* h, int band, double threshold_db);
 EQLIB_API int dtjhq_set_band_ratio(eqlib_handle* h, int band, double ratio);
+EQLIB_API int dtjhq_get_band_ratio(eqlib_handle* h, int band, double* out);
+EQLIB_API int dtjhq_set_band_percent(eqlib_handle* h, int band, double percent);
+EQLIB_API int dtjhq_get_band_percent(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_set_band_attack(eqlib_handle* h, int band, double attack_ms);
 EQLIB_API int dtjhq_set_band_release(eqlib_handle* h, int band, double release_ms);
 EQLIB_API int dtjhq_set_band_range(eqlib_handle* h, int band, double range_db);
 EQLIB_API int dtjhq_set_band_mode(eqlib_handle* h, int band, int mode);
+EQLIB_API int dtjhq_get_band_mode(eqlib_handle* h, int band, int* out);
 EQLIB_API int dtjhq_set_band_type(eqlib_handle* h, int band, int type);
 EQLIB_API int dtjhq_set_band_freq(eqlib_handle* h, int band, double freq_hz);
 EQLIB_API int dtjhq_set_band_gain(eqlib_handle* h, int band, double gain_db);
@@ -180,11 +184,9 @@ EQLIB_API int dtjhq_process_sidechain(eqlib_handle* h, const float* in, const fl
 EQLIB_API int dtjhq_process_sidechain_double(eqlib_handle* h, const double* in, const double* sc, double* out, int frames, int channels);
 EQLIB_API int dtjhq_get_band_gain(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_get_band_threshold(eqlib_handle* h, int band, double* out);
-EQLIB_API int dtjhq_get_band_ratio(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_get_band_attack(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_get_band_release(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_get_band_range(eqlib_handle* h, int band, double* out);
-EQLIB_API int dtjhq_get_band_mode(eqlib_handle* h, int band, int* out);
 EQLIB_API int dtjhq_get_band_type(eqlib_handle* h, int band, int* out);
 EQLIB_API int dtjhq_get_band_freq(eqlib_handle* h, int band, double* out);
 EQLIB_API int dtjhq_get_band_q(eqlib_handle* h, int band, double* out);
@@ -230,6 +232,11 @@ EQLIB_API int zdjhq_set_sample_rate(eqlib_handle* h, double sr);
 EQLIB_API int zdjhq_set_fft_size(eqlib_handle* h, int size);
 EQLIB_API int zdjhq_set_window(eqlib_handle* h, int window_type);
 EQLIB_API int zdjhq_set_pct(eqlib_handle* h, double pct);
+EQLIB_API int zdjhq_set_num_bands(eqlib_handle* h, int n);
+EQLIB_API int zdjhq_get_num_bands(eqlib_handle* h, int* out);
+EQLIB_API int zdjhq_set_band_freq(eqlib_handle* h, int band, double freq_hz);
+EQLIB_API int zdjhq_set_band_freqs(eqlib_handle* h, const double* freqs_hz, int n);
+EQLIB_API int zdjhq_get_band_freq(eqlib_handle* h, int band, double* out);
 EQLIB_API int zdjhq_set_reference_curve(eqlib_handle* h, const double* freqs_hz, const double* gains_db, int num_points);
 EQLIB_API int zdjhq_clear_reference_curve(eqlib_handle* h);
 EQLIB_API int zdjhq_has_reference_curve(eqlib_handle* h, int* out);
@@ -281,6 +288,7 @@ EQLIB_API int dtd_get_block_size(eqlib_handle* h, int* out);
 EQLIB_API int dtd_get_num_threads(eqlib_handle* h, int* out);
 EQLIB_API int dtd_get_enable_multithread(eqlib_handle* h, int* out);
 EQLIB_API int dtd_get_effective_threads(eqlib_handle* h, int* out);
+EQLIB_API int dtd_get_hardware_threads(eqlib_handle* h, int* out);
 EQLIB_API int dtd_reset(eqlib_handle* h);
 
 EQLIB_API int wjdx_wav_open_write(eqlib_handle* h, const char* path, int sample_rate, int channels, int format);

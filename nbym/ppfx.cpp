@@ -1,5 +1,6 @@
 #include "ppfx.h"
 #include <cmath>
+#include <algorithm>
 
 namespace eqlib {
 
@@ -17,11 +18,16 @@ bool FftRadix2::init(int size) {
     }
     m_size = size;
     m_log2_size = log2_size;
+
+    m_cos_table.resize(static_cast<std::size_t>(size / 2));
+    m_sin_table.resize(static_cast<std::size_t>(size / 2));
+    m_rev_table.resize(static_cast<std::size_t>(size));
+
     const double pi = 3.14159265358979323846;
     for (int i = 0; i < size / 2; ++i) {
         double angle = -2.0 * pi * i / size;
-        m_cos_table[i] = std::cos(angle);
-        m_sin_table[i] = std::sin(angle);
+        m_cos_table[static_cast<std::size_t>(i)] = std::cos(angle);
+        m_sin_table[static_cast<std::size_t>(i)] = std::sin(angle);
     }
     for (int i = 0; i < size; ++i) {
         int rev = 0;
@@ -30,14 +36,14 @@ bool FftRadix2::init(int size) {
             rev = (rev << 1) | (x & 1);
             x >>= 1;
         }
-        m_rev_table[i] = rev;
+        m_rev_table[static_cast<std::size_t>(i)] = rev;
     }
     return true;
 }
 
 void FftRadix2::forward(double* re, double* im) const {
     for (int i = 0; i < m_size; ++i) {
-        int j = m_rev_table[i];
+        int j = m_rev_table[static_cast<std::size_t>(i)];
         if (j > i) {
             double tr = re[i]; re[i] = re[j]; re[j] = tr;
             double ti = im[i]; im[i] = im[j]; im[j] = ti;
@@ -49,8 +55,8 @@ void FftRadix2::forward(double* re, double* im) const {
         for (int i = 0; i < m_size; i += len) {
             for (int j = 0; j < half; ++j) {
                 int k = j * step;
-                double wr = m_cos_table[k];
-                double wi = m_sin_table[k];
+                double wr = m_cos_table[static_cast<std::size_t>(k)];
+                double wi = m_sin_table[static_cast<std::size_t>(k)];
                 int a = i + j;
                 int b = a + half;
                 double tr = wr * re[b] - wi * im[b];
@@ -79,9 +85,13 @@ int FftRadix2::getSize() const { return m_size; }
 SpectrumAnalyzer::SpectrumAnalyzer() = default;
 
 void SpectrumAnalyzer::computeWindow() {
-    const double pi = 3.14159265358979323846;
     int size = m_config.fft_size;
-    if (size < 1) return;
+    if (size < 2) {
+        m_window.clear();
+        return;
+    }
+    m_window.resize(static_cast<std::size_t>(size));
+    const double pi = 3.14159265358979323846;
     for (int i = 0; i < size; ++i) {
         double w = 0.0;
         switch (m_config.window) {
@@ -104,7 +114,7 @@ void SpectrumAnalyzer::computeWindow() {
                 - 0.388 * std::cos(6.0 * pi * i / (size - 1));
             break;
         }
-        m_window[i] = w;
+        m_window[static_cast<std::size_t>(i)] = w;
     }
 }
 
@@ -116,27 +126,20 @@ bool SpectrumAnalyzer::init(double sr, int channels, const SpectrumConfig& confi
     m_channels = channels;
     m_config = config;
     m_states.resize(channels);
+    for (int c = 0; c < channels; ++c) {
+        m_states[c].resize(config.fft_size);
+    }
     if (!m_fft.init(config.fft_size)) return false;
     m_hop_size = static_cast<int>(config.fft_size * (1.0 - config.overlap));
     if (m_hop_size < 1) m_hop_size = 1;
     computeWindow();
     m_initialized = true;
-    reset();
     return true;
 }
 
 void SpectrumAnalyzer::reset() {
     for (int c = 0; c < m_states.size(); ++c) {
-        ChannelSpectrumState& s = m_states[c];
-        s.frame_fill = 0;
-        for (int i = 0; i < m_config.fft_size; ++i) {
-            s.frame_buffer[i] = 0.0;
-            s.re_window[i] = 0.0;
-            s.im_window[i] = 0.0;
-        }
-        for (int i = 0; i <= m_config.fft_size / 2; ++i) {
-            s.smoothed[i] = 0.0;
-        }
+        m_states[c].clear();
     }
 }
 
@@ -150,7 +153,9 @@ void SpectrumAnalyzer::setChannels(int ch) {
     if (ch == m_channels) return;
     m_channels = ch;
     m_states.resize(ch);
-    reset();
+    for (int c = 0; c < ch; ++c) {
+        m_states[c].resize(m_config.fft_size);
+    }
 }
 
 int SpectrumAnalyzer::getChannels() const {
@@ -160,28 +165,16 @@ int SpectrumAnalyzer::getChannels() const {
 void SpectrumAnalyzer::setFftSize(int size) {
     if (size <= 0 || size > FFT_MAX_SIZE) return;
     if (size == m_config.fft_size) return;
-    if (m_initialized) {
-        SpectrumConfig cfg = m_config;
-        cfg.fft_size = size;
-        init(m_sample_rate, m_channels, cfg);
-    } else {
-        m_config.fft_size = size;
-        m_hop_size = static_cast<int>(size * (1.0 - m_config.overlap));
-        if (m_hop_size < 1) m_hop_size = 1;
-        computeWindow();
-    }
+    SpectrumConfig cfg = m_config;
+    cfg.fft_size = size;
+    init(m_sample_rate, m_channels, cfg);
 }
 
 void SpectrumAnalyzer::setWindow(WindowType window) {
     if (window == m_config.window) return;
-    if (m_initialized) {
-        SpectrumConfig cfg = m_config;
-        cfg.window = window;
-        init(m_sample_rate, m_channels, cfg);
-    } else {
-        m_config.window = window;
-        computeWindow();
-    }
+    SpectrumConfig cfg = m_config;
+    cfg.window = window;
+    init(m_sample_rate, m_channels, cfg);
 }
 
 void SpectrumAnalyzer::setSmoothing(double smoothing) {
@@ -195,28 +188,36 @@ void SpectrumAnalyzer::processSample(double sample, int ch) {
     if (ch < 0 || ch >= m_channels) return;
 
     ChannelSpectrumState& s = m_states[ch];
-    s.frame_buffer[s.frame_fill++] = sample;
+    if (static_cast<int>(s.frame_buffer.size()) != m_config.fft_size) return;
+
+    s.frame_buffer[static_cast<std::size_t>(s.frame_fill++)] = sample;
     if (s.frame_fill < m_config.fft_size) return;
 
     for (int i = 0; i < m_config.fft_size; ++i) {
-        s.re_window[i] = s.frame_buffer[i] * m_window[i];
-        s.im_window[i] = 0.0;
+        s.re_window[static_cast<std::size_t>(i)] =
+            s.frame_buffer[static_cast<std::size_t>(i)]
+            * m_window[static_cast<std::size_t>(i)];
+        s.im_window[static_cast<std::size_t>(i)] = 0.0;
     }
-    m_fft.forward(s.re_window, s.im_window);
+    m_fft.forward(s.re_window.data(), s.im_window.data());
 
     int half = m_config.fft_size / 2;
     for (int i = 0; i <= half; ++i) {
-        double mag = std::sqrt(s.re_window[i] * s.re_window[i]
-                             + s.im_window[i] * s.im_window[i]);
+        double re = s.re_window[static_cast<std::size_t>(i)];
+        double im = s.im_window[static_cast<std::size_t>(i)];
+        double mag = std::sqrt(re * re + im * im);
         mag /= m_config.fft_size;
         if (i > 0 && i < half) mag *= 2.0;
-        s.smoothed[i] = m_smoothing * s.smoothed[i] + (1.0 - m_smoothing) * mag;
+        s.smoothed[static_cast<std::size_t>(i)] =
+            m_smoothing * s.smoothed[static_cast<std::size_t>(i)]
+            + (1.0 - m_smoothing) * mag;
     }
 
     int shift = m_hop_size;
     int remain = m_config.fft_size - shift;
     for (int i = 0; i < remain; ++i) {
-        s.frame_buffer[i] = s.frame_buffer[i + shift];
+        s.frame_buffer[static_cast<std::size_t>(i)] =
+            s.frame_buffer[static_cast<std::size_t>(i + shift)];
     }
     s.frame_fill = remain;
 }
@@ -227,11 +228,18 @@ bool SpectrumAnalyzer::getFrame(SpectrumFrame& out) const {
 
     const ChannelSpectrumState& s = m_states[0];
     int half = m_config.fft_size / 2;
-    out.num_bins = half + 1;
+    int n = half + 1;
+
+    out.magnitudes.resize(static_cast<std::size_t>(n));
+    out.freqs_hz.resize(static_cast<std::size_t>(n));
+    out.num_bins = n;
     out.sample_rate = m_sample_rate;
-    for (int i = 0; i <= half; ++i) {
-        out.magnitudes[i] = s.smoothed[i];
-        out.freqs_hz[i] = static_cast<double>(i) * m_sample_rate / m_config.fft_size;
+
+    for (int i = 0; i < n; ++i) {
+        out.magnitudes[static_cast<std::size_t>(i)] =
+            s.smoothed[static_cast<std::size_t>(i)];
+        out.freqs_hz[static_cast<std::size_t>(i)] =
+            static_cast<double>(i) * m_sample_rate / m_config.fft_size;
     }
     return true;
 }

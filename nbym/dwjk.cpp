@@ -9,6 +9,36 @@
 #include <cmath>
 #include <vector>
 
+namespace {
+
+eqlib::AudioFileFormat detect_file_format(const char* path) {
+    if (!path) return eqlib::AudioFileFormat::Unknown;
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return eqlib::AudioFileFormat::Unknown;
+    unsigned char header[12] = {0};
+    std::size_t n = std::fread(header, 1, 12, f);
+    std::fclose(f);
+    if (n < 4) return eqlib::AudioFileFormat::Unknown;
+
+    if (n >= 12 &&
+        header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
+        header[8] == 'W' && header[9] == 'A' && header[10] == 'V' && header[11] == 'E') {
+        return eqlib::AudioFileFormat::Wav;
+    }
+    if (header[0] == 'f' && header[1] == 'L' && header[2] == 'a' && header[3] == 'C') {
+        return eqlib::AudioFileFormat::Flac;
+    }
+    if (header[0] == 'I' && header[1] == 'D' && header[2] == '3') {
+        return eqlib::AudioFileFormat::Mp3;
+    }
+    if (header[0] == 0xFF && (header[1] & 0xE0) == 0xE0) {
+        return eqlib::AudioFileFormat::Mp3;
+    }
+    return eqlib::AudioFileFormat::Unknown;
+}
+
+}
+
 extern "C" {
 
 int jhq_create(eqlib_handle** out) {
@@ -177,7 +207,7 @@ int jhq_get_band_enable(eqlib_handle* h, int band, int* out) {
 
 int jhq_get_version(char* buf, int buf_size) {
     if (!buf || buf_size <= 0) return eqlib_err_param;
-    const char* ver = "eqlib 0.9.2";
+    const char* ver = "eqlib 1.0.0";
     int len = 0;
     while (ver[len] && len < buf_size - 1) { buf[len] = ver[len]; ++len; }
     buf[len] = '\0';
@@ -355,9 +385,9 @@ int dsjhq_get_curve_point(eqlib_handle* h,
     if (!h || !freq_hz || !level_db || !gain_db) return eqlib_err_param;
     const eqlib::CurveData& c = h->multiband_eq.getCurveRef();
     if (index < 0 || index >= c.num_points) return eqlib_err_param;
-    *freq_hz = c.freqs_hz[index];
-    *level_db = c.levels_db[index];
-    *gain_db = c.gains_db[index];
+    *freq_hz = c.freqs_hz[static_cast<std::size_t>(index)];
+    *level_db = c.levels_db[static_cast<std::size_t>(index)];
+    *gain_db = c.gains_db[static_cast<std::size_t>(index)];
     return eqlib_ok;
 }
 
@@ -386,7 +416,28 @@ int dtjhq_set_band_threshold(eqlib_handle* h, int band, double threshold_db) {
 int dtjhq_set_band_ratio(eqlib_handle* h, int band, double ratio) {
     if (!h) return eqlib_err_handle;
     if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
-    if (ratio < 1.0) return eqlib_err_param;
+    if (h->multiband_eq.setBandRatio(band, ratio) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int dtjhq_get_band_ratio(eqlib_handle* h, int band, double* out) {
+    if (!h || !out) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (h->multiband_eq.getBandRatio(band, *out) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int dtjhq_set_band_percent(eqlib_handle* h, int band, double percent) {
+    if (!h) return eqlib_err_handle;
+    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (h->multiband_eq.setBandPercent(band, percent) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int dtjhq_get_band_percent(eqlib_handle* h, int band, double* out) {
+    if (!h || !out) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (h->multiband_eq.getBandPercent(band, *out) != 0) return eqlib_err_param;
     return eqlib_ok;
 }
 
@@ -414,7 +465,14 @@ int dtjhq_set_band_range(eqlib_handle* h, int band, double range_db) {
 int dtjhq_set_band_mode(eqlib_handle* h, int band, int mode) {
     if (!h) return eqlib_err_handle;
     if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
-    if (mode < 0 || mode > 1) return eqlib_err_param;
+    if (h->multiband_eq.setBandMode(band, mode) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int dtjhq_get_band_mode(eqlib_handle* h, int band, int* out) {
+    if (!h || !out) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (h->multiband_eq.getBandMode(band, *out) != 0) return eqlib_err_param;
     return eqlib_ok;
 }
 
@@ -496,13 +554,6 @@ int dtjhq_get_band_threshold(eqlib_handle* h, int band, double* out) {
     return eqlib_ok;
 }
 
-int dtjhq_get_band_ratio(eqlib_handle* h, int band, double* out) {
-    if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
-    *out = 1.0;
-    return eqlib_ok;
-}
-
 int dtjhq_get_band_attack(eqlib_handle* h, int band, double* out) {
     if (!h || !out) return eqlib_err_param;
     if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
@@ -527,13 +578,6 @@ int dtjhq_get_band_range(eqlib_handle* h, int band, double* out) {
     eqlib::BandConfig cfg;
     if (h->multiband_eq.getBandConfig(band, cfg) != 0) return eqlib_err_param;
     *out = cfg.dyn_range_db;
-    return eqlib_ok;
-}
-
-int dtjhq_get_band_mode(eqlib_handle* h, int band, int* out) {
-    if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
-    *out = 0;
     return eqlib_ok;
 }
 
@@ -796,8 +840,8 @@ int ppfx_get_spectrum(eqlib_handle* h, float* mag_out, float* freq_out, int* num
     if (!h->spectrum.getFrame(frame)) return eqlib_err_state;
     *num_bins = frame.num_bins;
     for (int i = 0; i < frame.num_bins; ++i) {
-        mag_out[i] = static_cast<float>(frame.magnitudes[i]);
-        freq_out[i] = static_cast<float>(frame.freqs_hz[i]);
+        mag_out[i] = static_cast<float>(frame.magnitudes[static_cast<std::size_t>(i)]);
+        freq_out[i] = static_cast<float>(frame.freqs_hz[static_cast<std::size_t>(i)]);
     }
     return eqlib_ok;
 }
@@ -808,8 +852,8 @@ int ppfx_get_spectrum_double(eqlib_handle* h, double* mag_out, double* freq_out,
     if (!h->spectrum.getFrame(frame)) return eqlib_err_state;
     *num_bins = frame.num_bins;
     for (int i = 0; i < frame.num_bins; ++i) {
-        mag_out[i] = frame.magnitudes[i];
-        freq_out[i] = frame.freqs_hz[i];
+        mag_out[i] = frame.magnitudes[static_cast<std::size_t>(i)];
+        freq_out[i] = frame.freqs_hz[static_cast<std::size_t>(i)];
     }
     return eqlib_ok;
 }
@@ -828,7 +872,6 @@ int ppfx_get_hop_size(eqlib_handle* h, int* out) {
 
 int zdjhq_set_sample_rate(eqlib_handle* h, double sr) {
     if (!h) return eqlib_err_handle;
-    if (sr < eqlib::SR_MIN || sr > eqlib::SR_MAX) return eqlib_err_param;
     h->auto_eq.setSampleRate(sr);
     h->spectrum.setSampleRate(sr);
     return eqlib_ok;
@@ -853,6 +896,37 @@ int zdjhq_set_window(eqlib_handle* h, int window_type) {
 int zdjhq_set_pct(eqlib_handle* h, double pct) {
     if (!h) return eqlib_err_handle;
     h->auto_eq.setPct(pct);
+    return eqlib_ok;
+}
+
+int zdjhq_set_num_bands(eqlib_handle* h, int n) {
+    if (!h) return eqlib_err_handle;
+    if (n < 1 || n > eqlib::MAX_BANDS) return eqlib_err_param;
+    if (h->auto_eq.setNumBands(n) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int zdjhq_get_num_bands(eqlib_handle* h, int* out) {
+    if (!h || !out) return eqlib_err_param;
+    *out = h->auto_eq.getNumBands();
+    return eqlib_ok;
+}
+
+int zdjhq_set_band_freq(eqlib_handle* h, int band, double freq_hz) {
+    if (!h) return eqlib_err_handle;
+    if (h->auto_eq.setBandFreq(band, freq_hz) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int zdjhq_set_band_freqs(eqlib_handle* h, const double* freqs_hz, int n) {
+    if (!h) return eqlib_err_handle;
+    if (h->auto_eq.setBandFreqs(freqs_hz, n) != 0) return eqlib_err_param;
+    return eqlib_ok;
+}
+
+int zdjhq_get_band_freq(eqlib_handle* h, int band, double* out) {
+    if (!h || !out) return eqlib_err_param;
+    if (!h->auto_eq.getBandFreq(band, *out)) return eqlib_err_param;
     return eqlib_ok;
 }
 
@@ -928,8 +1002,11 @@ int zdjhq_compute_result(eqlib_handle* h) {
 int zdjhq_get_result(eqlib_handle* h, double* gains_db, int* num_bands) {
     if (!h || !gains_db || !num_bands) return eqlib_err_param;
     eqlib::AutoEqOutput out = h->auto_eq.getResult();
-    *num_bands = eqlib::NUM_BANDS;
-    for (int i = 0; i < eqlib::NUM_BANDS; ++i) {
+    int n = h->auto_eq.getNumBands();
+    if (n < 0) n = 0;
+    if (n > eqlib::MAX_BANDS) n = eqlib::MAX_BANDS;
+    *num_bands = n;
+    for (int i = 0; i < n; ++i) {
         gains_db[i] = out.gains_db[i];
     }
     return eqlib_ok;
@@ -1126,6 +1203,7 @@ int dtd_set_block_size(eqlib_handle* h, int size) {
 int dtd_set_num_threads(eqlib_handle* h, int n) {
     if (!h) return eqlib_err_handle;
     if (n < 0) return eqlib_err_param;
+    if (n > 64) return eqlib_err_param;
     h->multichannel.setNumThreads(n);
     return eqlib_ok;
 }
@@ -1163,6 +1241,12 @@ int dtd_get_enable_multithread(eqlib_handle* h, int* out) {
 int dtd_get_effective_threads(eqlib_handle* h, int* out) {
     if (!h || !out) return eqlib_err_param;
     *out = h->multichannel.getEffectiveThreads();
+    return eqlib_ok;
+}
+
+int dtd_get_hardware_threads(eqlib_handle* h, int* out) {
+    if (!h || !out) return eqlib_err_param;
+    *out = h->multichannel.getHardwareThreads();
     return eqlib_ok;
 }
 
@@ -1460,7 +1544,7 @@ int ypdr_load_mp3(eqlib_handle* h, const char* path) {
 
     h->loaded_info.sample_rate = sample_rate;
     h->loaded_info.channels = channels;
-    h->loaded_info.bits_per_sample = 32;
+    h->loaded_info.bits_per_sample = 16;
     h->loaded_info.num_frames = read_total;
     h->loaded_info.format = eqlib::AudioFileFormat::Mp3;
     return eqlib_ok;
@@ -1479,6 +1563,7 @@ int ypdr_load_flac(eqlib_handle* h, const char* path) {
 
     int sample_rate = static_cast<int>(flac->sampleRate);
     int channels = static_cast<int>(flac->channels);
+    int bits = static_cast<int>(flac->bitsPerSample);
     uint64_t total_frames = flac->totalPCMFrameCount;
     if (total_frames == 0) {
         drflac_close(flac);
@@ -1502,7 +1587,7 @@ int ypdr_load_flac(eqlib_handle* h, const char* path) {
 
     h->loaded_info.sample_rate = sample_rate;
     h->loaded_info.channels = channels;
-    h->loaded_info.bits_per_sample = 32;
+    h->loaded_info.bits_per_sample = bits;
     h->loaded_info.num_frames = read_total;
     h->loaded_info.format = eqlib::AudioFileFormat::Flac;
     return eqlib_ok;
@@ -1511,6 +1596,14 @@ int ypdr_load_flac(eqlib_handle* h, const char* path) {
 int ypdr_load(eqlib_handle* h, const char* path, int format) {
     if (!h) return eqlib_err_handle;
     if (!path) return eqlib_err_param;
+
+    if (format == eqlib_file_unknown) {
+        eqlib::AudioFileFormat detected = detect_file_format(path);
+        if (detected == eqlib::AudioFileFormat::Wav)  return ypdr_load_wav(h, path);
+        if (detected == eqlib::AudioFileFormat::Mp3)  return ypdr_load_mp3(h, path);
+        if (detected == eqlib::AudioFileFormat::Flac) return ypdr_load_flac(h, path);
+        return eqlib_err_param;
+    }
     if (format == eqlib_file_wav)  return ypdr_load_wav(h, path);
     if (format == eqlib_file_mp3)  return ypdr_load_mp3(h, path);
     if (format == eqlib_file_flac) return ypdr_load_flac(h, path);
@@ -1593,12 +1686,8 @@ int ypdc_process_and_save(eqlib_handle* h, const char* input_path,
                           const char* output_path, int output_format) {
     if (!h || !input_path || !output_path) return eqlib_err_param;
     if (output_format < 0 || output_format > 2) return eqlib_err_param;
-    if (ypdr_load_wav(h, input_path) != eqlib_ok) {
-        if (ypdr_load_mp3(h, input_path) != eqlib_ok) {
-            if (ypdr_load_flac(h, input_path) != eqlib_ok) {
-                return eqlib_err_io;
-            }
-        }
+    if (ypdr_load(h, input_path, eqlib_file_unknown) != eqlib_ok) {
+        return eqlib_err_io;
     }
     uint64_t frames = h->loaded_info.num_frames;
     int channels = h->loaded_info.channels;

@@ -25,7 +25,8 @@ class MultiBandDynEq {
     double          m_smoothing_coeff{0.001};
     CurveData       m_curve;
 
-    double processSampleInternal(double input, int ch, bool use_sidechain, double sidechain_input);
+    double processSampleInternal(double input, int ch,
+                                 bool use_sidechain, double sidechain_input);
 
 public:
     MultiBandDynEq();
@@ -52,11 +53,19 @@ public:
     int setBandDynRange(int band, double range_db);
     int setBandDynAttack(int band, double ms);
     int setBandDynRelease(int band, double ms);
+    int setBandPercent(int band, double percent);
+    int getBandPercent(int band, double& out) const;
+    int setBandRatio(int band, double ratio);
+    int getBandRatio(int band, double& out) const;
+    int setBandMode(int band, int mode);
+    int getBandMode(int band, int& out) const;
 
     int setBandTargetDbfsAll(double target);
     int setBandDynRangeAll(double range_db);
     int setBandDynAttackAll(double ms);
     int setBandDynReleaseAll(double ms);
+    int setBandPercentAll(double percent);
+    int setBandModeAll(int mode);
 
     int loadMeasuredCurve(const double* freqs_hz,
                           const double* levels_db,

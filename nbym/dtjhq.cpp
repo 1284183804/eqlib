@@ -13,49 +13,64 @@ double calcCoeff(double ms, double sr) {
 double interpCurveGain(const CurveData& c, double f) {
     if (c.num_points <= 0) return 0.0;
     if (f <= c.freqs_hz[0]) return c.gains_db[0];
-    if (f >= c.freqs_hz[c.num_points - 1]) return c.gains_db[c.num_points - 1];
+    if (f >= c.freqs_hz[static_cast<std::size_t>(c.num_points - 1)])
+        return c.gains_db[static_cast<std::size_t>(c.num_points - 1)];
     int lo = 0;
     int hi = c.num_points - 1;
     while (lo + 1 < hi) {
         int mid = (lo + hi) / 2;
-        if (c.freqs_hz[mid] <= f) lo = mid;
+        if (c.freqs_hz[static_cast<std::size_t>(mid)] <= f) lo = mid;
         else hi = mid;
     }
-    double f0 = c.freqs_hz[lo];
-    double f1 = c.freqs_hz[hi];
-    if (f1 <= f0) return c.gains_db[lo];
+    double f0 = c.freqs_hz[static_cast<std::size_t>(lo)];
+    double f1 = c.freqs_hz[static_cast<std::size_t>(hi)];
+    if (f1 <= f0) return c.gains_db[static_cast<std::size_t>(lo)];
     double t = (f - f0) / (f1 - f0);
-    return c.gains_db[lo] * (1.0 - t) + c.gains_db[hi] * t;
+    return c.gains_db[static_cast<std::size_t>(lo)] * (1.0 - t)
+         + c.gains_db[static_cast<std::size_t>(hi)] * t;
 }
 
 void buildFlatCurve(CurveData& c) {
-    c.num_points = CURVE_MAX_POINTS;
+    c.resize(CURVE_MAX_POINTS);
     c.source = static_cast<int>(CurveSource::Flat);
     c.is_measured = false;
     c.reference_db = 0.0;
     double span = (FREQ_MAX_HZ - FREQ_MIN_HZ) / static_cast<double>(CURVE_MAX_POINTS - 1);
     for (int i = 0; i < CURVE_MAX_POINTS; ++i) {
-        c.freqs_hz[i] = FREQ_MIN_HZ + span * static_cast<double>(i);
-        c.levels_db[i] = 0.0;
-        c.gains_db[i] = 0.0;
+        c.freqs_hz[static_cast<std::size_t>(i)] = FREQ_MIN_HZ + span * static_cast<double>(i);
+        c.levels_db[static_cast<std::size_t>(i)] = 0.0;
+        c.gains_db[static_cast<std::size_t>(i)] = 0.0;
     }
 }
 
-void measuredToGain(CurveData& c) {
+void measuredToGain(CurveData& c, double reference_db, bool use_user_reference) {
     if (c.num_points <= 0) return;
     double sum = 0.0;
     for (int i = 0; i < c.num_points; ++i) {
-        sum += c.levels_db[i];
+        sum += c.levels_db[static_cast<std::size_t>(i)];
     }
     double mean = sum / static_cast<double>(c.num_points);
+    double ref = use_user_reference ? reference_db : mean;
     for (int i = 0; i < c.num_points; ++i) {
-        double g = mean - c.levels_db[i];
+        double g = ref - c.levels_db[static_cast<std::size_t>(i)];
         if (g > GAIN_MAX_DB) g = GAIN_MAX_DB;
         if (g < GAIN_MIN_DB) g = GAIN_MIN_DB;
-        c.gains_db[i] = g;
+        c.gains_db[static_cast<std::size_t>(i)] = g;
     }
-    c.reference_db = mean;
+    c.reference_db = ref;
     c.is_measured = true;
+}
+
+double percentToRatio(double percent) {
+    if (percent <= 0.0) return 1.0;
+    if (percent >= 100.0) return 1e9;
+    return 100.0 / (100.0 - percent);
+}
+
+double ratioToPercent(double ratio) {
+    if (ratio <= 1.0) return 0.0;
+    if (ratio >= 1e9) return 100.0;
+    return (1.0 - 1.0 / ratio) * 100.0;
 }
 
 }
@@ -76,6 +91,8 @@ MultiBandDynEq::MultiBandDynEq() {
         m_bands[i].cfg.dyn_range_db = 12.0;
         m_bands[i].cfg.dyn_attack_ms = 10.0;
         m_bands[i].cfg.dyn_release_ms = 200.0;
+        m_bands[i].cfg.dyn_percent = 100.0;
+        m_bands[i].cfg.dyn_mode = 0;
         for (int c = 0; c < m_channels; ++c) {
             m_bands[i].envelope[c] = 0.0;
         }
@@ -213,6 +230,48 @@ int MultiBandDynEq::setBandDynRelease(int band, double ms) {
     return 0;
 }
 
+int MultiBandDynEq::setBandPercent(int band, double percent) {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    if (!std::isfinite(percent)) return -1;
+    if (percent < 0.0) percent = 0.0;
+    if (percent > 100.0) percent = 100.0;
+    m_bands[band].cfg.dyn_percent = percent;
+    return 0;
+}
+
+int MultiBandDynEq::getBandPercent(int band, double& out) const {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    out = m_bands[band].cfg.dyn_percent;
+    return 0;
+}
+
+int MultiBandDynEq::setBandRatio(int band, double ratio) {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    if (!std::isfinite(ratio)) return -1;
+    if (ratio < 1.0) return -1;
+    m_bands[band].cfg.dyn_percent = ratioToPercent(ratio);
+    return 0;
+}
+
+int MultiBandDynEq::getBandRatio(int band, double& out) const {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    out = percentToRatio(m_bands[band].cfg.dyn_percent);
+    return 0;
+}
+
+int MultiBandDynEq::setBandMode(int band, int mode) {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    if (mode < 0 || mode > 1) return -1;
+    m_bands[band].cfg.dyn_mode = mode;
+    return 0;
+}
+
+int MultiBandDynEq::getBandMode(int band, int& out) const {
+    if (band < 0 || band >= MAX_BANDS) return -1;
+    out = m_bands[band].cfg.dyn_mode;
+    return 0;
+}
+
 int MultiBandDynEq::setBandTargetDbfsAll(double target) {
     for (int i = 0; i < m_num_bands; ++i) m_bands[i].cfg.target_dbfs = target;
     return 0;
@@ -236,6 +295,20 @@ int MultiBandDynEq::setBandDynReleaseAll(double ms) {
     return 0;
 }
 
+int MultiBandDynEq::setBandPercentAll(double percent) {
+    if (!std::isfinite(percent)) return -1;
+    if (percent < 0.0) percent = 0.0;
+    if (percent > 100.0) percent = 100.0;
+    for (int i = 0; i < m_num_bands; ++i) m_bands[i].cfg.dyn_percent = percent;
+    return 0;
+}
+
+int MultiBandDynEq::setBandModeAll(int mode) {
+    if (mode < 0 || mode > 1) return -1;
+    for (int i = 0; i < m_num_bands; ++i) m_bands[i].cfg.dyn_mode = mode;
+    return 0;
+}
+
 int MultiBandDynEq::loadMeasuredCurve(const double* freqs_hz, const double* levels_db,
                                        int num_points, double reference_db) {
     if (!freqs_hz || !levels_db) return -1;
@@ -244,15 +317,14 @@ int MultiBandDynEq::loadMeasuredCurve(const double* freqs_hz, const double* leve
         if (!std::isfinite(freqs_hz[i]) || !std::isfinite(levels_db[i])) return -1;
         if (i > 0 && freqs_hz[i] < freqs_hz[i - 1]) return -1;
     }
+    m_curve.resize(num_points);
     for (int i = 0; i < num_points; ++i) {
-        m_curve.freqs_hz[i] = freqs_hz[i];
-        m_curve.levels_db[i] = levels_db[i];
-        m_curve.gains_db[i] = 0.0;
+        m_curve.freqs_hz[static_cast<std::size_t>(i)] = freqs_hz[i];
+        m_curve.levels_db[static_cast<std::size_t>(i)] = levels_db[i];
+        m_curve.gains_db[static_cast<std::size_t>(i)] = 0.0;
     }
-    m_curve.num_points = num_points;
     m_curve.source = static_cast<int>(CurveSource::Injected);
-    measuredToGain(m_curve);
-    (void)reference_db;
+    measuredToGain(m_curve, reference_db, true);
     for (int i = 0; i < m_num_bands; ++i) m_bands[i].dirty = true;
     return 0;
 }
@@ -266,12 +338,12 @@ int MultiBandDynEq::loadGainCurve(const double* freqs_hz, const double* gains_db
         if (!std::isfinite(freqs_hz[i]) || !std::isfinite(gains_db[i])) return -1;
         if (i > 0 && freqs_hz[i] < freqs_hz[i - 1]) return -1;
     }
+    m_curve.resize(num_points);
     for (int i = 0; i < num_points; ++i) {
-        m_curve.freqs_hz[i] = freqs_hz[i];
-        m_curve.gains_db[i] = gains_db[i];
-        m_curve.levels_db[i] = 0.0;
+        m_curve.freqs_hz[static_cast<std::size_t>(i)] = freqs_hz[i];
+        m_curve.gains_db[static_cast<std::size_t>(i)] = gains_db[i];
+        m_curve.levels_db[static_cast<std::size_t>(i)] = 0.0;
     }
-    m_curve.num_points = num_points;
     m_curve.source = source;
     m_curve.is_measured = false;
     for (int i = 0; i < m_num_bands; ++i) m_bands[i].dirty = true;
@@ -321,6 +393,8 @@ void MultiBandDynEq::consumeParamQueue() {
         if (pc.mask & PARAM_MASK_FREQ)   m_bands[pc.band].cfg.center_hz = pc.freq_hz;
         if (pc.mask & PARAM_MASK_Q)      m_bands[pc.band].cfg.q         = pc.q;
         if (pc.mask & PARAM_MASK_ENABLE) m_bands[pc.band].cfg.enable    = pc.enable;
+        if (pc.mask & PARAM_MASK_PERCENT) m_bands[pc.band].cfg.dyn_percent = pc.percent;
+        if (pc.mask & PARAM_MASK_MODE)   m_bands[pc.band].cfg.dyn_mode  = pc.mode;
         m_bands[pc.band].dirty = true;
     }
 }
@@ -353,10 +427,23 @@ double MultiBandDynEq::processSampleInternal(double input, int ch,
 
         double env_db = 20.0 * std::log10(env + 1e-12);
         double dyn_db = 0.0;
-        if (env_db > m_bands[i].cfg.target_dbfs) {
-            dyn_db = -(env_db - m_bands[i].cfg.target_dbfs);
-            if (dyn_db < -m_bands[i].cfg.dyn_range_db) {
-                dyn_db = -m_bands[i].cfg.dyn_range_db;
+        double strength = m_bands[i].cfg.dyn_percent / 100.0;
+
+        if (m_bands[i].cfg.dyn_mode == 0) {
+            if (env_db > m_bands[i].cfg.target_dbfs) {
+                double over = env_db - m_bands[i].cfg.target_dbfs;
+                dyn_db = -over * strength;
+                if (dyn_db < -m_bands[i].cfg.dyn_range_db) {
+                    dyn_db = -m_bands[i].cfg.dyn_range_db;
+                }
+            }
+        } else {
+            if (env_db < m_bands[i].cfg.target_dbfs) {
+                double under = m_bands[i].cfg.target_dbfs - env_db;
+                dyn_db = under * strength;
+                if (dyn_db > m_bands[i].cfg.dyn_range_db) {
+                    dyn_db = m_bands[i].cfg.dyn_range_db;
+                }
             }
         }
         m_bands[i].target_gain_db = target_static + dyn_db;

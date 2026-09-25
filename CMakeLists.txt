@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(eqlib VERSION 0.9.1 LANGUAGES CXX)
+project(eqlib VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -137,6 +137,11 @@ if(EQLIB_BUILD_TESTS)
         cs_resample
         cs_wav_roundtrip
         cs_curve
+        cs_zdjhq_multi
+        cs_compressor
+        cs_ypdr_detect
+        cs_threads
+        cs_ppfx_mem
     )
 
     foreach(test_name ${EQLIB_TEST_NAMES})

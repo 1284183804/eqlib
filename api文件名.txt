@@ -1,385 +1,1043 @@
-eqlib/
-├── dwjk/                 # 对外接口
-│   └── eqlib/
-│       └── eqlib.h
-├── nbym/                 # 内部源码
-│   ├── gglx.h            # 公共类型
-│   ├── rz.h              # 日志
-│   ├── csdl.h            # 参数队列
-│   ├── sejlbq.h          # 双二阶滤波器
-│   ├── sejlbq.cpp
-│   ├── jhqhx.h           # 均衡器核心
-│   ├── jhqhx.cpp
-│   ├── dtjhq.h           # 动态均衡器
-│   ├── dtjhq.cpp
-│   ├── zdjhq.h           # 自动均衡器
-│   ├── zdjhq.cpp
-│   ├── ppfx.h            # 频谱分析
-│   ├── ppfx.cpp
-│   ├── zdzy.h            # 自动增益
-│   ├── zdzy.cpp
-│   ├── cl.h              # 侧链
-│   ├── cl.cpp
-│   ├── zc.h              # 中侧
-│   ├── zc.cpp
-│   ├── bh.h              # 饱和
-│   ├── bh.cpp
-│   ├── dtd.h             # 多通道
-│   ├── dtd.cpp
-│   ├── wjdx.h            # 文件读写
-│   ├── wjdx.cpp
-│   ├── dwjk.cpp          # 对外 C API 实现
-│   └── nbty.h            # 内部通用
-├── dsf/                  # 第三方
-│   ├── dr_mp3.h
-│   ├── dr_flac.h
-│   └── dr_wav.h
-├── cs/                   # 测试
-│   ├── cs_sejlbq.cpp
-│   ├── cs_jhqhx.cpp
-│   └── cs_dwjk.cpp
-├── wd/                   # 文档
-└── CMakeLists.txt
-说明：
+# eqlib API 细节 · 模块职责说明
 
-    dwjk = 对外接口
+按模块逐个说明**负责什么、怎么用、什么时候用、有什么坑**。
 
-    nbym = 内部源码
+---
 
-    dsf = 第三方
+## 模块总览
 
-    cs = 测试
+```
+                         ┌──────────────┐
+                         │  eqlib_handle │  单一不透明句柄
+                         └───────┬───────┘
+                                 │
+      ┌──────────────────────────┼──────────────────────────┐
+      │                          │                          │
+  ┌───▼────┐                ┌────▼────┐                ┌────▼────┐
+  │  输入   │                │  处理链  │                │  输出   │
+  └───┬────┘                └────┬────┘                └────┬────┘
+      │                          │                          │
+   ypdr_                     jhq_  (参数 EQ)              wjdx_
+   音频导入                  dsjhq_ (动态多频段) ★核心     WAV 文件
+   WAV/MP3/FLAC              dtjhq_ (动态 EQ 兼容)         nccwj_
+                             cl_  (侧链)                   WAV 内存
+                             zc_  (中侧)                   ypdc_
+                             bh_  (饱和)                   一条龙
+                             zdzy_ (AGC)
+                             xxwjhq_ (线性相位)
+                             hhxw_  (混合相位)
 
-    wd = 文档
+  分析侧：ppfx_ (频谱) → zdjhq_ (自动 EQ)
 
-二、文件命名（功能首字母）
-文件	功能
-gglx.h	公共类型
-rz.h	日志
-csdl.h	参数队列
-sejlbq.h/.cpp	双二阶滤波器
-jhqhx.h/.cpp	均衡器核心
-dtjhq.h/.cpp	动态均衡器
-zdjhq.h/.cpp	自动均衡器
-ppfx.h/.cpp	频谱分析
-zdzy.h/.cpp	自动增益
-cl.h/.cpp	侧链
-zc.h/.cpp	中侧
-bh.h/.cpp	饱和
-dtd.h/.cpp	多通道
-wjdx.h/.cpp	文件读写
-dwjk.cpp	对外 C API 实现
-nbty.h	内部通用
-三、C API 前缀（功能拼音首字母小写）
-功能	前缀	示例
-音频导入	ypdr	ypdr_load_mp3
-音频导出	ypdc	ypdc_save_wav
-均衡器	jhq	jhq_set_band_gain
-动态均衡器	dtjhq	dtjhq_set_threshold
-自动均衡器	zdjhq	zdjhq_set_reference_curve
-频谱分析	ppfx	ppfx_get_spectrum
-自动增益	zdzy	zdzy_set_target
-侧链	cl	cl_set_source
-中侧	zc	zc_set_mode
-饱和	bh	bh_set_drive
-多通道	dtd	dtd_set_channels
-文件读写	wjdx	wjdx_load_wav
+  独立工具：
+  cy_  (重采样)
+  dtd_ (多通道多线程)
+```
 
-操作词可以继续用英文，方便记忆：
+**核心原则**：所有模块共享**同一个 `eqlib_handle`**。你创建一次句柄，配置任意模块，调用对应的 `process` 函数即可。**模块之间默认不联动**——你调 `jhq_process` 只跑 7 段 EQ，调 `dsjhq_process` 只跑多频段。要串起来，自己按顺序调。
 
-    load = 加载
+---
 
-    save = 保存
+## 一、`jhq_` — 参数 EQ（固定 7 段）
 
-    set = 设置
+### 职责
 
-    get = 获取
+**7 段固定参数均衡器**。8 种滤波器类型。最低延迟，最常用。
 
-    process = 处理
+### 它做什么
 
-    reset = 重置
+- 独立处理 7 个频段，每段可设类型、频率、增益、Q、启用
+- 所有段**级联**处理（串联），后一段处理前一段的输出
+- 增益应用有平滑（一阶 IIR），避免参数突变产生咔嗒声
 
-    create = 创建
+### 它不做什么
 
-    destroy = 销毁
+- 不做动态处理（没有阈值、包络）
+- 不做多通道独立包络（每通道独立滤波器状态，但增益参数是全局的）
+- 不做曲线注入
 
-这样 ypdr_load_mp3 一眼就是“音频导入_加载_MP3”。
-gglx.h 公共类型 用途：集中定义所有公共常量、枚举、结构体。FilterType 定义 8 种滤波器类型，ParamChange 用于参数队列传递。DynMode：动态 EQ 方向，Downward 是超过阈值往下压，Upward 是低于阈值往上提。
+### 核心 API
 
-SidechainSource：侧链来源，Internal 用自身信号，External 用外部信号。
+```c
+jhq_create(&h) / jhq_destroy(h) / jhq_reset(h)
+jhq_set_sample_rate(h, 48000.0)
+jhq_set_channels(h, 2)
+jhq_set_band_type(h, 0, eqlib_filter_peaking)
+jhq_set_band_freq(h, 0, 1000.0)
+jhq_set_band_gain(h, 0, 6.0)
+jhq_set_band_q(h, 0, 1.0)
+jhq_set_band_enable(h, 0, 1)
+jhq_process(h, in, out, frames, channels)
+jhq_get_band_gain(h, 0, &out)
+```
 
-MidSideMode：中侧模式，Stereo 直通，MidOnly 只留中间，SideOnly 只留两侧，MidSide 分别调增益。
+### 参数
 
-DynParams：动态 EQ 每个频段的动态参数。
-DynMode：动态 EQ 方向，Downward 是超过阈值往下压，Upward 是低于阈值往上提。
+| 参数 | 范围 |
+|---|---|
+| 采样率 | 32000 ~ 384000 |
+| 频率 | 20 ~ 20000 Hz |
+| 增益 | -60 ~ +24 dB |
+| Q | 0.1 ~ 18 |
+| 段数 | 固定 7（`band` 索引 0~6） |
 
-SidechainSource：侧链来源，Internal 用自身信号，External 用外部信号。
+### 8 种滤波器类型
 
-MidSideMode：中侧模式，Stereo 直通，MidOnly 只留中间，SideOnly 只留两侧，MidSide 分别调增益。
+| 值 | 名称 | 行为 |
+|---|---|---|
+| 0 | `eqlib_filter_peaking` | 峰值，中心频率处提升/衰减 |
+| 1 | `eqlib_filter_lowshelf` | 低架，低频整体提升/衰减 |
+| 2 | `eqlib_filter_highshelf` | 高架 |
+| 3 | `eqlib_filter_lowpass` | 低通 |
+| 4 | `eqlib_filter_highpass` | 高通 |
+| 5 | `eqlib_filter_bandpass` | 带通 |
+| 6 | `eqlib_filter_notch` | 陷波 |
+| 7 | `eqlib_filter_allpass` | 全通 |
 
-DynParams：动态 EQ 每个频段的动态参数。
-rz  对外 API：
-API	用途
-eqlib::setGlobalLogger(Logger*)	设置全局日志器，传 nullptr 恢复空实现
-eqlib::getGlobalLogger()	获取当前日志器
-Logger::trace/debug/info/warn/error	写日志
+**注意**：`lowpass` / `highpass` / `bandpass` / `notch` / `allpass` **忽略 `gain_db` 参数**（公式里没用 A）。
 
-用途说明：DSP 核心默认不输出任何日志，零开销。你的 Qt 应用可以实现 eqlib::Logger 接口，把日志接到 qDebug。核心出错时通过日志接口占位，Release 下不产生任何代码。
-csdl.h 参数队列  对外 API：这个类只给内部用，不暴露给 C API。
+### 什么时候用
 
-用途说明：单生产者（UI 线程）单消费者（音频线程）无锁环形队列。push 在 UI 线程调用，pop 在音频线程调用。队列满时 push 返回 false，调用方降级直写。 
-sejlbq.h 双二阶滤波器  对外 API：Biquad<T> 是内部类，不暴露给 C API。
+- 标准均衡器（音乐播放器、录音软件）
+- 高通/低通滤除低频/高频杂音
+- 简单的频响修正
 
-用途说明：双二阶 IIR 滤波器，支持 8 种类型。setParams 重新计算系数，processSample 逐样本处理，reset 清空状态。模板支持 float 和 double。
-jhqhx.h + jhqhx.cpp 均衡器核心 对外 API：EqCore 是内部类，通过 C API 暴露。
+### 什么时候不用
 
-用途说明：
+- 需要动态处理（用 `dsjhq_`）
+- 需要 93 段精细修正（用 `dsjhq_`）
+- 需要曲线注入（用 `dsjhq_`）
 
-    setBandGain 通过无锁队列传递，UI 线程安全。
+### 坑
 
-    processSample 内做增益指数平滑和系数更新，避免滋滋声。
+- **`jhq_reset` 只清 DSP 状态**（滤波器历史），不清参数。清全部用 `jhq_clear_all`。
+- **多通道的增益参数是共享的**——你把 L 通道增益调到 +6，R 通道也是 +6。不能 L/R 分别调。
+- **原地处理**支持：`in == out` 可以。
 
-    consumeParamQueue 在 processBlock 开头调用一次，消费所有待处理参数。
+---
 
-    支持 float 和 double 两种处理路径。 
- eqlib.h 对外唯一头文件 jhq_create	创建均衡器句柄
-jhq_destroy	销毁句柄
-jhq_reset	重置滤波器状态
-jhq_set_sample_rate	设置采样率
-jhq_set_channels	设置通道数
-jhq_set_band_type	设置频段滤波器类型
-jhq_set_band_freq	设置频段中心频率
-jhq_set_band_gain	设置频段增益 dB
-jhq_set_band_q	设置频段 Q 值
-jhq_set_band_enable	启用/禁用频段
-jhq_process	处理 float 交错样本
-jhq_process_double	处理 double 交错样本
-jhq_get_band_gain	读取频段增益
-jhq_get_band_type	读取频段类型
-jhq_get_band_freq	读取频段频率
-jhq_get_band_q	读取频段 Q
-jhq_get_band_enable	读取频段启用状态
-jhq_get_version	获取版本号
-dwjk.cpp C API 实现   用途说明：C API 边界层。所有函数返回 int 错误码，0 成功，负数失败。内部异常不跨边界，全部转成错误码。句柄 eqlib_handle 是不透明指针，外部看不到内部结构。用途：对外 C API 声明。dtjhq_ 是动态 EQ，cl_ 是侧链，zc_ 是中侧。
-第一期 API 汇总（你调用时用的）
-生命周期
-API	用途
-jhq_create	创建句柄
-jhq_destroy	销毁句柄
-jhq_reset	重置状态
-全局设置
-API	用途
-jhq_set_sample_rate	设置采样率，范围 32000~384000
-jhq_set_channels	设置通道数，范围 1~64
-频段设置
-API	用途
-jhq_set_band_type	设置滤波器类型，0~7
-jhq_set_band_freq	设置中心频率，20~20000 Hz
-jhq_set_band_gain	设置增益，-24~+24 dB
-jhq_set_band_q	设置 Q 值，0.1~18
-jhq_set_band_enable	启用/禁用频段
-处理
-API	用途
-jhq_process	处理 float 交错样本
-jhq_process_double	处理 double 交错样本
-查询
-API	用途
-jhq_get_band_gain	读增益
-jhq_get_band_type	读类型
-jhq_get_band_freq	读频率
-jhq_get_band_q	读 Q
-jhq_get_band_enable	读启用状态
-jhq_get_version	读版本
+## 二、`dsjhq_` — 动态多频段（1~93 段）★核心
 
-eqlib/nbym/dtjhq.h 用途：动态 EQ 核心类。每个频段有独立滤波器、包络检测、动态增益计算。processSampleWithSidechain 支持外部侧链信号控制增益。用途：动态 EQ 核心类。每个频段有独立滤波器、包络检测、动态增益计算。processSampleWithSidechain 支持外部侧链信号控制增益。
-eqlib/nbym/dtjhq.cpp 用途：动态 EQ 实现。每个频段检测处理后信号的包络，超过阈值时按比率衰减，低于阈值时可选提升用途：动态 EQ 实现。每个频段检测处理后信号的包络，超过阈值时按比率衰减，低于阈值时可选提升。processSampleWithSidechain 用外部侧链信号控制包络检测。。processSampleWithSidechain 用外部侧链信号控制包络检测。
-eqlib/nbym/cl.h 用途：侧链处理器。检测外部信号包络，计算增益，用于 ducking 或动态控制。用途：侧链处理器。检测外部信号包络，计算增益，用于 ducking 或动态控制。
-eqlib/nbym/cl.cpp 用途：侧链实现。process 接收侧链信号，返回线性增益。m_amount 控制侧链影响程度，m_range_db 限制最大增益变化用途：侧链实现。process 接收侧链信号，返回线性增益。m_amount 控制侧链影响程度，m_range_db 限制最大增益变化。
-eqlib/nbym/zc.h 用途：中侧处理器。把立体声拆成 Mid/Side，分别调整增益后合并。
-eqlib/nbym/zc.cpp 用途：中侧处理实现。MidSide 模式下，Mid 和 Side 分别乘增益，再合并回左右。
-第二期 API 汇总（你调用时用的）
-动态 EQ dtjhq_
-API	用途
-dtjhq_set_band_threshold	设置频段动态阈值 dB
-dtjhq_set_band_ratio	设置压缩比率
-dtjhq_set_band_attack	设置启动时间 ms
-dtjhq_set_band_release	设置释放时间 ms
-dtjhq_set_band_range	设置最大增益变化范围 dB
-dtjhq_set_band_mode	设置方向：0=向下压，1=向上提
-dtjhq_set_band_type	设置滤波器类型 0~7
-dtjhq_set_band_freq	设置中心频率 Hz
-dtjhq_set_band_gain	设置静态增益 dB
-dtjhq_set_band_q	设置 Q 值
-dtjhq_set_band_enable	启用/禁用频段
-dtjhq_process	处理 float 交错样本
-dtjhq_process_double	处理 double 交错样本
-dtjhq_process_sidechain	带侧链的 float 处理
-dtjhq_process_sidechain_double	带侧链的 double 处理
-dtjhq_get_band_*	读取各参数
-侧链 cl_
-API	用途
-cl_set_enable	启用/禁用侧链
-cl_set_attack	设置启动时间 ms
-cl_set_release	设置释放时间 ms
-cl_set_amount	设置侧链影响程度 0~1
-cl_set_target	设置目标电平 dB
-cl_set_range	设置最大增益变化范围 dB
-cl_reset	重置包络
-cl_process	处理 float 侧链，输出增益
-cl_process_double	处理 double 侧链，输出增益
-cl_get_*	读取各参数
-中侧 zc_
-API	用途
-zc_set_mode	0=立体声直通，1=只留中，2=只留两侧，3=中侧分别调
-zc_set_mid_gain	设置中置增益 dB
-zc_set_side_gain	设置两侧增益 dB
-zc_reset	重置
-zc_process	处理 float 左右声道
-zc_process_double	处理 double 左右声道
-zc_get_*	读取各参数
-eqlib/nbym/ppfx.h 用途：FftRadix2 是纯标准库实现的 radix-2 FFT。SpectrumAnalyzer 做流式频谱分析，逐样本输入，攒够一帧后计算频谱，输出 SpectrumFrame。
-eqlib/nbym/ppfx.cpp 用途：纯标准库 radix-2 FFT + 流式频谱分析。processSample 逐样本输入，内部维护帧缓冲，攒够一帧算一次 FFT，带指数平滑。getFrame 读取当前频谱。
-eqlib/nbym/zdjhq.h 用途：自动 EQ 核心。setReferenceCurve 设置目标曲线，feedSpectrum 输入当前频谱，computeResult 计算 7 个频段的增益，getResult 读取结果。
-eqlib/nbym/zdjhq.cpp 用途：自动 EQ 实现。setReferenceCurve 设置目标，feedSpectrum 输入实测频谱，computeResult 算 7 段增益。参考曲线是必须的，不设置 computeResult 返回 false。
-eqlib/nbym/zdzy.h 用途：自动增益核心。流式检测包络，与目标 dBFS 比较，计算增益，平滑后应用。带噪声门和最大增益限制。
-eqlib/nbym/zdzy.cpp 用途：自动增益实现。逐样本检测包络，与目标 dBFS 比较，算增益，Attack/Release 平滑，限制最大增益变化，带噪声门。
-eqlib/dwjk/eqlib/eqlib.h 用途：对外唯一头文件。第三期新增 ppfx_、zdjhq_、zdzy_ 三组 API，以及 eqlib_window_*、eqlib_fft_* 常量。
-eqlib/nbym/dwjk.cpp 用途：C API 实现。第三期新增 ppfx_、zdjhq_、zdzy_ 三组函数。eqlib_handle 结构体新增 spectrum、auto_eq、agc 三个成员。
-API 汇总（你调用时用的）
-频谱分析 ppfx_
-API	用途
-ppfx_init	初始化，设置 FFT 大小、窗类型、重叠率
-ppfx_reset	重置频谱分析器
-ppfx_set_smoothing	设置平滑系数 0~0.999
-ppfx_process	输入 float 样本，流式分析
-ppfx_process_double	输入 double 样本，流式分析
-ppfx_get_spectrum	读取 float 频谱幅度和频率
-ppfx_get_spectrum_double	读取 double 频谱幅度和频率
-ppfx_get_fft_size	读 FFT 大小
-ppfx_get_hop_size	读 hop 大小
-自动 EQ zdjhq_
-API	用途
-zdjhq_set_sample_rate	设置采样率
-zdjhq_set_fft_size	设置 FFT 大小
-zdjhq_set_window	设置窗类型
-zdjhq_set_pct	设置调整百分比 0~200
-zdjhq_set_reference_curve	设置参考曲线，必须
-zdjhq_clear_reference_curve	清除参考曲线
-zdjhq_has_reference_curve	查询是否已设置参考曲线
-zdjhq_get_reference_point_count	读参考曲线点数
-zdjhq_get_reference_point	读指定参考点
-zdjhq_start	开始分析
-zdjhq_stop	停止分析
-zdjhq_is_running	查询是否在分析
-zdjhq_has_result	查询是否有结果
-zdjhq_feed_spectrum	把当前频谱喂给自动 EQ
-zdjhq_compute_result	计算 7 段增益
-zdjhq_get_result	读取 7 段增益
-zdjhq_get_rms_error	读 RMS 误差
-zdjhq_get_max_error	读最大误差
-zdjhq_reset	重置
-自动增益 zdzy_
-API	用途
-zdzy_set_sample_rate	设置采样率
-zdzy_set_target	设置目标 dBFS
-zdzy_set_attack	设置启动时间 ms
-zdzy_set_release	设置释放时间 ms
-zdzy_set_max_boost	设置最大增益 dB
-zdzy_set_max_cut	设置最大衰减 dB
-zdzy_set_gate_enable	启用/禁用噪声门
-zdzy_set_gate_threshold	设置噪声门阈值 dBFS
-zdzy_reset	重置
-zdzy_process	处理 float 样本
-zdzy_process_double	处理 double 样本
-zdzy_get_current_gain_db	读当前增益 dB
-zdzy_get_envelope_db	读当前包络 dB
-eqlib/nbym/gglx.h  用途：第四期新增 SaturationType、WavFormat、SaturationParams、MultiChannelConfig、WavHeaderInfo。
-eqlib/nbym/bh.h 用途：模拟饱和核心。支持软削波、磁带、电子管、二极管四种非线性模型。
-eqlib/nbym/bh.cpp 用途：四种饱和模型。softClip 是三次软削波，tapeSat 是 tanh 磁带，tubeSat 是非对称电子管，diodeSat 是对数二极管。mix 控制干湿比，drive 控制驱动力，output 控制补偿增益
-eqlib/nbym/dtd.h 用途：多通道 + 多线程调度。processParallel 把帧范围分成 N 块，每块一个线程，调用用户传入的 lambda。getEffectiveThreads 根据配置和硬件并发数决定实际线程数。
-eqlib/nbym/dtd.cpp 用途：线程管理。getEffectiveThreads 优先用用户指定线程数，否则用硬件并发数（最多 8）。processParallel 把帧范围分块，每块一个线程。
-eqlib/nbym/wjdx.h 用途：WAV 文件读写。WavWriter 支持 float32、int24、int16 输出。WavReader 只支持 float32 和 int16 读取。
-eqlib/nbym/wjdx.cpp 用途：WAV 写入和读取。WavWriter 支持 float32、int24、int16 输出，finalize 回填 RIFF 和 data 大小。WavReader 支持 float32 和 int16 读取。所有文件操作都用 std::FILE，纯标准库。
-API 汇总（你调用时用的）
-饱和 bh_
-API	用途
-bh_set_type	设置饱和类型 0=软削波，1=磁带，2=电子管，3=二极管
-bh_set_drive	设置驱动力 dB
-bh_set_mix	设置干湿比 0~1
-bh_set_output	设置输出补偿 dB
-bh_reset	重置
-bh_process	处理 float 样本
-bh_process_double	处理 double 样本
-bh_get_type	读类型
-bh_get_drive	读驱动力
-bh_get_mix	读干湿比
-bh_get_output	读输出补偿
-多通道 dtd_
-API	用途
-dtd_set_num_channels	设置通道数
-dtd_set_block_size	设置块大小
-dtd_set_num_threads	设置线程数，0=自动
-dtd_set_enable_multithread	启用/禁用多线程
-dtd_get_num_channels	读通道数
-dtd_get_block_size	读块大小
-dtd_get_num_threads	读线程数
-dtd_get_enable_multithread	读多线程开关
-dtd_get_effective_threads	读实际生效线程数
-dtd_reset	重置线程池
-文件读写 wjdx_
-API	用途
-wjdx_wav_open_write	打开 WAV 写入，设置采样率、通道、格式
-wjdx_wav_write_float	写 float 样本
-wjdx_wav_write_double	写 double 样本
-wjdx_wav_finalize	回填 RIFF 大小
-wjdx_wav_close	关闭写入
-wjdx_wav_get_frames_written	读已写帧数
-wjdx_wav_open_read	打开 WAV 读取
-wjdx_wav_get_info	读采样率、通道、位深、格式、帧数
-wjdx_wav_read_float	读 float 样本
-wjdx_wav_read_double	读 double 样本
-wjdx_wav_read_close	关闭读取
-wjdx_wav_get_frames_read	读已读帧数
-eqlib/nbym/dwjk.cpp 用途：C API 实现。第四期新增 bh_、dtd_、wjdx_ 三组函数。eqlib_handle 新增 saturation、multichannel、wav_writer、wav_reader 四个成员。
-eqlib/nbym/gglx.h 用途：第五期新增 AUDIO_BLOCK_FRAMES、AudioFileFormat、AudioFileInfo。
-eqlib/nbym/nbty.h 用途：内部通用头。把 eqlib_handle 结构定义从 dwjk.cpp 提取出来，让 dwjk.cpp 和 ypdr.cpp 都能用。新增音频缓冲 audio_buffer_f、audio_buffer_d 和 loaded_info。
-eqlib/nbym/ypdr.h 用途：音频文件加载器。loadWav、loadMp3、loadFlac 三种格式，加载后内部统一保存 float 和 double 两份数据。getFloatData / getDoubleData 直接返回指针。
-eqlib/nbym/ypdr.cpp 用途：音频加载器实现。loadWav 用已有的 WavReader，loadMp3 用 drmp3_init_file + drmp3_read_pcm_frames_f32，loadFlac 用 drflac_open_file + drflac_read_pcm_frames_f32。加载后同时保留 float 和 double 两份缓冲。
+### 职责
 
-注意：dr_mp3.h 和 dr_flac.h 的实现宏放在这个文件里。DR_MP3_NO_STDIO 和 DR_FLAC_NO_STDIO 是为了避免和其他 dr_libs 冲突，但如果你放的头文件版本较旧，需要去掉这两个宏。
-eqlib/dwjk/eqlib/eqlib.h 用途：对外唯一头文件。第五期新增 eqlib_file_* 常量，ypdr_ 音频导入 API，ypdc_ 音频导出 API。
-eqlib/nbym/dwjk.cpp 用途说明：ypdr_load_mp3 直接解码 MP3 到内存，ypdr_get_info 读参数，配置 EQ/饱和/AGC，ypdc_process_and_save 一次性完成加载、处理、写 WAV。
-eqlib/cs/cs_sejlbq.cpp 用途：验证 5 种滤波器类型。Peaking 在中心频率有增益，LowPass 对低频通过，HighPass 对高频通过，Notch 对中心频率衰减，AllPass 幅度不变。
-eqlib/cs/cs_jhqhx.cpp  用途：验证 7 段 EQ 核心的参数设置、读取、处理、重置、参数队列消费。
-eqlib/cs/cs_dtjhq.cpp 用途：验证动态 EQ 的自检测和侧链检测路径，读取阈值、比率、范围、模式。
-eqlib/cs/cs_zdjhq.cpp 用途：验证自动 EQ 的参考曲线设置、启动/停止、喂频谱、计算结果、读误差。 
-eqlib/cs/cs_ppfx.cpp 用途：验证频谱分析的初始化、流式喂样本、读取频谱帧、重置。
-eqlib/cs/cs_zdzy.cpp 用途：验证自动增益的 boost 和 cut 两条路径，读当前增益和包络 dB。
-eqlib/cs/cs_bh.cpp 用途：验证四种饱和模型的输出 RMS 和参数读取。
-eqlib/cs/cs_dtd.cpp 用途：验证多通道、多线程调度、分块并行处理。processParallel 用 lambda 把帧范围分块。
-eqlib/cs/cs_wjdx.cpp 用途：验证 WAV 写入、读取、回填 RIFF 大小、读回样本。
-eqlib/cs/cs_dwjk.cpp 用途：验证 C API 全链路：创建、设置、EQ 处理、动态 EQ、饱和、自动增益、中侧、版本、销毁。
-eqlib/nbym/xxwjhq.h 用途：线性相位 EQ 核心。用频率采样法设计对称 FIR 核，群延迟固定为 kernel_size / 2 个采样点。rebuild 根据当前 7 段参数重新计算核。
-eqlib/nbym/xxwjhq.cpp  用途：用频率采样法设计线性相位 FIR。流程：在 N 个频率点采样 7 段 EQ 的幅度响应 → IFFT 得到零相位脉冲响应 → 循环移位 N/2 得到线性相位 → Blackman-Harris 窗 → DC 归一化。群延迟固定为 kernel_size / 2 个采样点。
+**库的核心模块**。1~93 段任意配置的动态多频段均衡 + 参考曲线注入。
 
-核心公式：双二阶在频率 f 处的幅度用 z = exp(j*2πf/sr) 代入 H(z) = (b0 + b1*z⁻¹ + b2*z⁻²) / (1 + a1*z⁻¹ + a2*z⁻²) 计算。
-eqlib/cs/cs_xxwjhq.cpp 用途：验证线性相位 EQ 的核大小、延迟、增益、重置
-第六期 API 汇总
-线性相位 EQ xxwjhq_
-API	用途
-xxwjhq_set_kernel_size	设置 FIR 核长度，256/512/1024
-xxwjhq_get_kernel_size	读核长度
-xxwjhq_set_band_type	设置频段类型 0~7
-xxwjhq_set_band_freq	设置中心频率 Hz
-xxwjhq_set_band_gain	设置增益 dB
-xxwjhq_set_band_q	设置 Q 值
-xxwjhq_set_band_enable	启用/禁用频段
-xxwjhq_get_band_*	读各参数
-xxwjhq_reset	清空历史缓冲
-xxwjhq_rebuild	强制重建核
-xxwjhq_get_latency	读群延迟采样点
-xxwjhq_process	处理 float 交错样本
-xxwjhq_process_double	处理 double 交错样本
+### 它做什么
 
-延迟说明：latency = kernel_size / 2。512 抽头在 48kHz 下延迟约 5.33ms。线性相位无相位失真，但有预振铃。
+- 1~93 段任意段数（运行时可调）
+- 每段独立配置：频段区间、中心频率、Q、类型、启用、静态增益
+- 每段独立动态参数：目标 dBFS、动态范围、Attack、Release
+- 参考曲线注入（测量频谱 / 增益曲线 / 内置曲线）
+- 每段根据其**中心频率**从曲线取增益，加到静态增益上
 
+### 它不做什么
+
+- 不做整体增益（曲线注入是相对频响修正）
+- 不支持 ratio / knee / upward（动态是 **1:∞ 压缩**）
+- 段区间 `low_hz` / `high_hz` 不参与滤波，只用于计算中心频率
+
+### 核心 API
+
+```c
+// 段配置
+dsjhq_set_num_bands(h, 93)
+dsjhq_auto_distribute(h, 20.0, 20000.0)   // 对数均匀分配
+dsjhq_set_band_range(h, 0, 20.0, 40.0)    // 只影响 center_hz 计算
+dsjhq_set_band_center(h, 0, 30.0)         // 真正控制滤波频率
+dsjhq_set_band_q(h, 0, 0.707)
+dsjhq_set_band_gain(h, 0, 6.0)
+dsjhq_set_band_type(h, 0, eqlib_filter_peaking)
+dsjhq_set_band_enable(h, 0, 1)
+
+// 动态参数
+dsjhq_set_band_target_dbfs(h, 0, -18.0)
+dsjhq_set_band_dyn_range(h, 0, 12.0)
+dsjhq_set_band_dyn_attack(h, 0, 10.0)
+dsjhq_set_band_dyn_release(h, 0, 200.0)
+
+// 批量
+dsjhq_set_band_target_dbfs_all(h, -18.0)
+dsjhq_set_band_dyn_range_all(h, 12.0)
+
+// 曲线注入
+dsjhq_load_measured_curve(h, freqs, levels, n, reference_db)
+dsjhq_load_gain_curve(h, freqs, gains, n, source)
+dsjhq_load_builtin_curve(h)
+dsjhq_clear_curve(h)
+
+// 处理
+dsjhq_process(h, in, out, frames, channels)
+```
+
+### 动态增益公式
+
+```
+env_db = 20 * log10(滤波器输出的包络)
+dyn_db = 0
+if env_db > target_dbfs:
+    dyn_db = -(env_db - target_dbfs)
+    if dyn_db < -dyn_range_db:
+        dyn_db = -dyn_range_db
+
+最终增益 = 静态增益 + 曲线增益 + dyn_db
+```
+
+**这就是"1:∞ 压缩"**：超过阈值多少就压多少，没有 ratio 概念，只受 `dyn_range_db` 限制最大压降。
+
+### 参数
+
+| 参数 | 范围 |
+|---|---|
+| 段数 | 1 ~ 93 |
+| 目标 dBFS | 任意（常用 -30 ~ 0） |
+| 动态范围 | 0 ~ 任意（常用 0 ~ 20 dB） |
+| Attack | > 0 ms（常用 5~20） |
+| Release | > 0 ms（常用 100~300） |
+
+### 曲线注入的语义
+
+- `freqs_hz`：**必须升序排列**，否则报错
+- `levels_db`：电平值，dBFS
+- 库内部计算：`gain[i] = mean(levels) - levels[i]`
+- 高于平均 → 负增益（压下来）
+- 低于平均 → 正增益（提上去）
+- 整体平均 ≈ 0 dB
+
+**`reference_db` 参数当前不生效**，保留供将来使用。
+
+### 什么时候用
+
+- 房间声学校正（测量频响 → 修正）
+- 耳机频响修正（Harman 曲线）
+- 多频段动态控制（分频段压缩）
+- 精细 EQ（93 段）
+
+### 什么时候不用
+
+- 只要 7 段基础 EQ（用 `jhq_`）
+- 需要 ratio 可调的压缩器（库不支持）
+
+### 坑
+
+- **段区间不重叠更好**。重叠会导致响应叠加。
+- **`auto_distribute` 会覆盖 Q / type**，手动配置会被冲掉。先分配再调参数。
+- **曲线注入后所有段标脏**，下次处理才重建系数，第一次 `process` 会有轻微 CPU 峰值。
+- **`dtjhq_` 和 `dsjhq_` 操作同一状态**。不要混用。
+
+---
+
+## 三、`dtjhq_` — 动态 EQ（兼容 7 段）
+
+### 职责
+
+**兼容层**。转发到 `dsjhq_` 的前 7 段，提供旧 API 不破坏。
+
+### 它做什么
+
+- 提供 7 段动态 EQ 接口
+- 全部转发到 `dsjhq_`：
+  - `set_band_threshold` → `dsjhq_set_band_target_dbfs`
+  - `set_band_attack` → `dsjhq_set_band_dyn_attack`
+  - `set_band_freq` → `dsjhq_set_band_center`
+  - 等
+- 提供 `dtjhq_process_sidechain`，真的用侧链信号控制包络
+
+### 它不做什么
+
+- **`ratio` 参数不生效**（只做范围校验，值不存）
+- **`mode` 参数不生效**（只做范围校验，`get` 永远返回 0 = downward）
+- **`low_hz` / `high_hz` 也不参与滤波**（和 `dsjhq_` 一样）
+
+### 核心 API
+
+```c
+dtjhq_set_band_threshold(h, 0, -18.0)
+dtjhq_set_band_ratio(h, 0, 2.0)      // 不生效
+dtjhq_set_band_attack(h, 0, 10.0)
+dtjhq_set_band_release(h, 0, 200.0)
+dtjhq_set_band_range(h, 0, 12.0)
+dtjhq_set_band_mode(h, 0, 0)         // 不生效
+dtjhq_set_band_freq(h, 0, 1000.0)
+dtjhq_set_band_gain(h, 0, 6.0)
+dtjhq_set_band_q(h, 0, 1.0)
+dtjhq_process(h, in, out, frames, channels)
+dtjhq_process_sidechain(h, in, sc, out, frames, channels)  // ★真侧链
+```
+
+### 什么时候用
+
+- 已有代码用了 `dtjhq_`，不想改
+- 需要带侧链的动态 EQ（`dtjhq_process_sidechain`）
+
+### 什么时候不用
+
+- 新代码（直接用 `dsjhq_`）
+
+### 坑
+
+- **`ratio` / `mode` 是僵尸参数**，设了不生效。文档或用户界面不要暴露这两个。
+- **和 `dsjhq_` 共享状态**。同一个句柄上同时配 `dsjhq_` 和 `dtjhq_` 会互相干扰。
+
+---
+
+## 四、`cl_` — 侧链
+
+### 职责
+
+**侧链包络检测器**。检测外部信号包络，**输出线性增益**，调用方自己乘到音频上。
+
+### 它做什么
+
+- 检测侧链信号（`sc`）的包络
+- 根据目标电平、影响程度、范围算出增益
+- 输出 `gain_out`（线性值，不是 dB）
+- 每通道独立包络
+
+### 它不做什么
+
+- 不改音频——**只输出增益**
+- 不帮调用方乘
+
+### 核心 API
+
+```c
+cl_set_enable(h, 1)
+cl_set_attack(h, 10.0)
+cl_set_release(h, 200.0)
+cl_set_amount(h, 1.0)         // 0~1
+cl_set_target(h, -18.0)
+cl_set_range(h, 12.0)
+cl_process(h, sc, gain_out, frames, channels)
+```
+
+### 用法
+
+```c
+// 1. 检测侧链信号，得到增益
+float sc[1024 * 2] = {...};        // 侧链信号
+float gain[1024 * 2] = {0};
+cl_process(h, sc, gain, 1024, 2);
+
+// 2. 自己乘到主信号
+for (int i = 0; i < 1024 * 2; ++i) {
+    audio[i] *= gain[i];
+}
+```
+
+### 什么时候用
+
+- 手动 ducking（广播里背景音乐被主持人声音压低）
+- 自定义动态处理逻辑
+- 需要"只算增益"而不动音频的场景
+
+### 什么时候不用
+
+- 只想简单做侧链动态 EQ（用 `dtjhq_process_sidechain`，它一步到位）
+
+### 坑
+
+- **`cl_` 和 `dtjhq_process_sidechain` 功能重叠**。前者只出增益，后者直接出音频。二选一。
+- 输出是**线性增益**，乘的时候别搞错单位。
+
+---
+
+## 五、`zc_` — 中侧处理
+
+### 职责
+
+**立体声 Mid/Side 处理**。拆 Mid / Side，分别调增益，合并回 L/R。
+
+### 它做什么
+
+- 4 种模式：直通 / 只留 Mid / 只留 Side / Mid-Side 分别调
+- Mid / Side 独立增益
+
+### 4 种模式
+
+| 值 | 模式 | 行为 |
+|---|---|---|
+| 0 | `eqlib_ms_stereo` | 立体声直通，不做处理 |
+| 1 | `eqlib_ms_mid_only` | 只留中（`(L+R)/2` 同时输出到 L 和 R） |
+| 2 | `eqlib_ms_side_only` | 只留两侧（`(L-R)/2` 输出到 L，反向到 R） |
+| 3 | `eqlib_ms_mid_side` | Mid / Side 分别乘增益后合并 |
+
+### 核心 API
+
+```c
+zc_set_mode(h, eqlib_ms_mid_side)
+zc_set_mid_gain(h, 3.0)
+zc_set_side_gain(h, -2.0)
+zc_process(h, in_l, in_r, out_l, out_r, frames)
+```
+
+**注意**：`zc_process` 用**分离的左右指针**，不是交错缓冲。
+
+### 什么时候用
+
+- 立体声宽度调整（Side 增益控制宽度）
+- 人声增强（Mid 增益提升）
+- 立体声降为单声道（只留 Mid）
+
+### 坑
+
+- 只有 `MidSide` 模式才用增益参数，其它 3 种模式忽略 `mid_gain` / `side_gain`。
+- 只有立体声有意义（单声道下 Side = 0）。
+
+---
+
+## 六、`ppfx_` — 频谱分析
+
+### 职责
+
+**流式频谱分析**。radix-2 FFT，5 种窗，多通道独立。
+
+### 它做什么
+
+- 逐样本输入，攒够一帧做一次 FFT
+- 指数平滑（跨帧）
+- 输出幅度 + 频率数组
+- 每通道独立分析器
+
+### 它不做什么
+
+- 不改音频
+- 不做 STFT 重构（不是"STFT 处理"）
+
+### 核心 API
+
+```c
+ppfx_init(h, 2048, eqlib_window_hann, 0.75)
+ppfx_set_smoothing(h, 0.7)
+ppfx_process(h, in, frames, channels)
+ppfx_get_spectrum(h, mag_out, freq_out, &num_bins)
+```
+
+### 参数
+
+| 参数 | 范围 |
+|---|---|
+| FFT 大小 | 512 / 1024 / 2048 / 4096 / 8192 |
+| 窗 | Rectangular / Hann / Hamming / Blackman / FlatTop |
+| overlap | [0, 1)（比例，0.75 = 75% 重叠） |
+| smoothing | 0 ~ 0.999 |
+
+### `ppfx_get_spectrum` 的契约
+
+- `num_bins` 是**输出**（函数填写实际 bin 数）
+- 调用方**必须预分配 ≥ FFT_MAX_SIZE / 2 + 1 = 4097** 大小的缓冲
+- 还没攒够一帧时返回 `eqlib_err_state`
+
+### 什么时候用
+
+- 可视化频谱
+- 喂给 `zdjhq_` 做自动 EQ
+- 分析音频频率成分
+
+### 坑
+
+- **`ppfx_get_spectrum` 返回的是首通道频谱**。多通道完整谱需要扩展（当前版本不支持）。
+- **`num_bins` 是输出**，别当成输入容量用。
+
+---
+
+## 七、`zdjhq_` — 自动 EQ
+
+### 职责
+
+**根据参考曲线 + 测量频谱，自动计算 7 段 EQ 增益**。
+
+### 它做什么
+
+- 用户设参考曲线（目标频响）
+- 用户通过 `feed_spectrum` 喂当前频谱
+- 库计算 7 个固定频段（80 / 200 / 500 / 1000 / 2500 / 6000 / 12000 Hz）的增益
+- 输出 7 段 `gains_db`
+
+### 它不做什么
+
+- 不驱动 93 段（只出 7 段）
+- 不自动应用到 EQ（用户自己取结果）
+- 不设置参考曲线就不工作
+
+### 核心 API
+
+```c
+zdjhq_set_reference_curve(h, freqs, gains, n)   // 最多 512 点
+zdjhq_start(h)
+zdjhq_feed_spectrum(h)                          // 从 ppfx 取频谱
+zdjhq_compute_result(h)
+zdjhq_get_result(h, gains_db, &num_bands)       // num_bands 固定 7
+zdjhq_get_rms_error(h, &rms)
+```
+
+### 算法
+
+1. 参考曲线归一化：`ref_rel = ref_raw - mean(ref)`
+2. 测量频谱归一化：`meas_rel = meas_raw - mean(meas)`
+3. 差值：`diff = (ref_rel - meas_rel) * pct / 100`
+4. Clamp 到 `[-60, +24]`
+
+**7 段固定中心频率**：80 / 200 / 500 / 1000 / 2500 / 6000 / 12000 Hz（硬编码，不可调）。
+
+### 参考曲线上限 512 点
+
+`zdjhq_set_reference_curve` 最多 512 点。超过返回 `eqlib_err_param`。**这和 `dsjhq_load_*_curve` 的 20001 点是两套独立系统**。
+
+### 什么时候用
+
+- 自动房间校正（麦克风测频响 → 自动算 EQ）
+- 一键匹配目标曲线
+
+### 坑
+
+- **必须设参考曲线**，否则 `compute_result` 返回失败。
+- **只输出 7 段**。想驱动 93 段多频段，自己插值展开。
+- **`zdjhq_set_fft_size` / `set_window` / `set_sample_rate` 会同步 `ppfx_`**（0.9.2 新增），所以调这些不用重复调 `ppfx_*`。
+
+---
+
+## 八、`zdzy_` — 自动增益
+
+### 职责
+
+**AGC（自动增益控制）**。逐样本检测包络，与目标 dBFS 比较，平滑后应用增益。
+
+### 它做什么
+
+- 每通道独立包络和增益
+- 目标 dBFS、Attack、Release
+- 最大增益 / 衰减限制
+- 噪声门（低于阈值时保持不变）
+
+### 核心 API
+
+```c
+zdzy_set_sample_rate(h, 48000.0)
+zdzy_set_target(h, -18.0)
+zdzy_set_attack(h, 10.0)
+zdzy_set_release(h, 200.0)
+zdzy_set_max_boost(h, 12.0)
+zdzy_set_max_cut(h, -12.0)
+zdzy_set_gate_enable(h, 1)
+zdzy_set_gate_threshold(h, -60.0)
+zdzy_process(h, in, out, frames, channels)
+```
+
+### 算法
+
+```
+1. 更新包络（attack / release 一阶 IIR）
+2. env_db = 20 * log10(envelope)
+3. gain_db = target_dbfs - env_db
+4. clamp 到 [max_cut, max_boost]
+5. 增益平滑（attack 用于下降，release 用于上升）
+6. output = input * gain_linear
+```
+
+### 什么时候用
+
+- 播客自动电平
+- 直播音量稳定
+- 离线批处理响度统一
+
+### 坑
+
+- **噪声门当前逻辑**：只看包络是否低于 `gate_threshold_dbfs`，**低于就保持当前增益**（不放大也不衰减）。
+- **超过 `max_boost` / `max_cut` 的增益会被 clamp**，不是软限制。
+
+---
+
+## 九、`bh_` — 模拟饱和
+
+### 职责
+
+**4 种模拟非线性饱和**。
+
+### 4 种模型
+
+| 值 | 模型 | 公式 |
+|---|---|---|
+| 0 | `eqlib_sat_softclip` | 三次软削波 |
+| 1 | `eqlib_sat_tape` | `tanh` 磁带 |
+| 2 | `eqlib_sat_tube` | 非对称电子管 |
+| 3 | `eqlib_sat_diode` | 对数二极管 |
+
+### 核心 API
+
+```c
+bh_set_type(h, eqlib_sat_tape)
+bh_set_drive(h, 6.0)     // 驱动力 dB
+bh_set_mix(h, 1.0)       // 0~1 干湿比
+bh_set_output(h, 0.0)    // 输出补偿 dB
+bh_process(h, in, out, frames, channels)
+```
+
+### 处理链
+
+```
+driven = input * 10^(drive_db/20)
+saturated = applySat(type, driven)
+mixed = input * (1 - mix) + saturated * mix
+output = mixed * 10^(output_db/20)
+```
+
+### 什么时候用
+
+- 母带暖色
+- 单个轨道加厚
+- 创意失真
+
+### 坑
+
+- **没有过采样**。非线性会产生混叠，对高频敏感的场景慎用大驱动力。
+- **无状态**，所以多通道天然正确，不需要每通道独立。
+
+---
+
+## 十、`dtd_` — 多通道多线程
+
+### 职责
+
+**多通道处理 + 线程池调度**。把帧范围分块，每块一个 worker 线程。
+
+### 核心 API
+
+```c
+dtd_set_num_channels(h, 2)
+dtd_set_block_size(h, 512)
+dtd_set_num_threads(h, 4)         // 0 = 自动
+dtd_set_enable_multithread(h, 1)
+dtd_get_effective_threads(h, &n)
+dtd_reset(h)                      // 无操作，线程常驻
+```
+
+### 线程模型
+
+- 构造时启动 N 个常驻 worker（N = min(8, `hardware_concurrency`)，或用户指定）
+- 每次 `processParallel` 用 condition variable 唤醒 N 个 worker
+- 完成后 join（实际是 wait condition）
+- **线程不销毁重建**
+
+### 什么时候用
+
+- 多通道大数据量
+- 离线批处理
+
+### 坑
+
+- **当前 C API 没有暴露 `processParallel` 接口**。`dtd_*` 只提供配置，不提供实际处理入口。它是给内部用的。
+- 实时音频不要用——线程同步开销大。
+
+---
+
+## 十一、`wjdx_` — WAV 文件读写
+
+### 职责
+
+**WAV 文件读写**，纯标准库（`std::FILE`）。
+
+### 支持的格式
+
+| 写入 | 读取 |
+|---|---|
+| float32 | ✓ |
+| int24 | ✓ |
+| int16 | ✓ |
+
+**读 = 写，对称**。
+
+### 核心 API
+
+```c
+// 写
+wjdx_wav_open_write(h, "out.wav", 48000, 2, eqlib_wav_float32)
+wjdx_wav_write_float(h, data, frames)
+wjdx_wav_finalize(h)
+wjdx_wav_close(h)
+
+// 读
+wjdx_wav_open_read(h, "in.wav")
+wjdx_wav_get_info(h, &sr, &ch, &bits, &format, &num_frames)
+wjdx_wav_read_float(h, out, frames)
+wjdx_wav_read_close(h)
+```
+
+### `num_frames` 现在是真的
+
+0.9.2 修复了 `num_frames` 恒为 0 的 bug。`wjdx_wav_get_info` 从 data chunk 大小反推帧数。
+
+### 什么时候用
+
+- 保存处理结果
+- 加载 WAV 文件
+- 校验音频文件
+
+### 坑
+
+- **`write` 后必须 `finalize`**，回填 RIFF 和 data 大小，否则文件头是 0。
+- **`close` 会自动 `finalize`**（如果没手动调）。
+- 采样率范围 8000 ~ 384000，通道 1 ~ 64。
+
+---
+
+## 十二、`nccwj_` — WAV 内存读写
+
+### 职责
+
+**WAV 内存读写**，不经过文件系统。
+
+### 核心 API
+
+```c
+// 写
+nccwj_open_write(h, 48000, 2, eqlib_wav_float32)
+nccwj_write_float(h, data, frames)
+nccwj_finalize(h)
+nccwj_get_data(h, &out_data, &out_size)   // 拿指针
+nccwj_clear(h)
+
+// 读
+nccwj_open_read(h, data, size)
+nccwj_get_info(h, &sr, &ch, &bits, &format)
+nccwj_read_float(h, out, frames)
+nccwj_close_read(h)
+```
+
+### 什么时候用
+
+- WebAssembly（无文件系统）
+- 嵌入式
+- 网络传输（WAV 数据在内存里）
+
+### 坑
+
+- **`get_data` 返回的指针在 `clear` 或析构前有效**。不要在 `clear` 之后还用它。
+- 格式支持和 `wjdx_` 一样（float32 / int24 / int16）。
+
+---
+
+## 十三、`ypdr_` — 音频导入（WAV / MP3 / FLAC）
+
+### 职责
+
+**解码音频文件到内存**。
+
+### 它做什么
+
+- 直接解码 WAV / MP3 / FLAC
+- 内部保留 float 一份（**double 是懒生成**，首次 `ypdr_get_double` 时才分配）
+- `ypdr_get_info` 读元信息
+
+### 核心 API
+
+```c
+ypdr_load_wav(h, "in.wav")
+ypdr_load_mp3(h, "in.mp3")
+ypdr_load_flac(h, "in.flac")
+ypdr_load(h, "in.xyz", eqlib_file_wav)   // 通用，需指定格式
+
+ypdr_get_info(h, &sr, &ch, &num_frames, &format)
+ypdr_get_float(h, out, frames, channels)
+ypdr_get_double(h, out, frames, channels)   // 首次会生成 double 缓冲
+ypdr_clear(h)
+```
+
+### 内存优化
+
+0.9.2 起，加载时**只分配 float 缓冲**。double 缓冲在首次 `ypdr_get_double` 时才从 float 转换生成。5 分钟立体声从 ~345 MB 降到 ~115 MB。
+
+### 什么时候用
+
+- 加载音频做处理
+- 批处理多个文件
+
+### 坑
+
+- **`ypdr_load` 不自动探测格式**。必须显式指定 `format` 参数。
+- **`ypdr_get_float` 从头读，无偏移参数**。想读中间段，自己算指针。
+- **MP3 / FLAC 位深硬编码 32**。`ypdr_get_info` 拿不到原始位深。
+
+---
+
+## 十四、`ypdc_` — 音频导出（一条龙）
+
+### 职责
+
+**一条龙**：加载 → EQ → 多频段 → 饱和 → AGC → 写 WAV。
+
+### 核心 API
+
+```c
+ypdc_process_and_save(h, "in.mp3", "out.wav", eqlib_wav_float32)
+```
+
+### 处理链
+
+```
+ypdr_load_* (自动尝试 WAV → MP3 → FLAC)
+  ↓
+jhq_processBlockFloat   (7 段 EQ)
+  ↓
+dsjhq_processBlockFloat (多频段)
+  ↓
+bh_processBlockFloat    (饱和)
+  ↓
+zdzy_processBlockFloat  (AGC)
+  ↓
+wav_writer.writeFloat32
+```
+
+**注意**：**不含** `dtjhq_` / `zc_` / `cl_` / `xxwjhq_` / `hhxw_` / `cy_`。这些要手动串。
+
+### 什么时候用
+
+- 离线批处理（一首歌一条命令）
+- 命令行工具
+- 快速原型
+
+### 坑
+
+- **内部自动尝试三种格式**（WAV → MP3 → FLAC），和 `ypdr_load` 不自动探测的行为不同。
+- **错误码不细分**。整条链任何一步失败都返回 `eqlib_err_io`，不知道哪一步错的。
+
+---
+
+## 十五、`xxwjhq_` — 线性相位 EQ
+
+### 职责
+
+**线性相位 FIR EQ**。频率采样法设计核，群延迟固定。
+
+### 核心 API
+
+```c
+xxwjhq_set_kernel_size(h, 512)
+xxwjhq_set_band_type(h, 0, eqlib_filter_peaking)
+xxwjhq_set_band_freq(h, 0, 1000.0)
+xxwjhq_set_band_gain(h, 0, 6.0)
+xxwjhq_set_band_q(h, 0, 1.0)
+xxwjhq_rebuild(h)              // 参数改了要手动重建核
+xxwjhq_get_latency(h, &n)      // = kernel_size / 2
+xxwjhq_process(h, in, out, frames, channels)
+```
+
+### 参数
+
+| 参数 | 范围 |
+|---|---|
+| 核大小 | 32 ~ 1024（建议 256 / 512 / 1024） |
+| 延迟 | kernel_size / 2 采样点 |
+
+512 抽头在 48kHz 下延迟 ≈ 5.33 ms。
+
+### 什么时候用
+
+- 母带处理（相位一致性重要）
+- 离线处理（不在乎延迟）
+
+### 什么时候不用
+
+- 实时监听（延迟明显）
+
+### 坑
+
+- **改参数后要手动 `xxwjhq_rebuild`**。否则 FIR 核不更新。
+- **`rebuild` 在音频线程首次触发会卡顿**。建议在非音频线程预 rebuild。
+- **有预振铃**（FIR 固有），瞬态前有轻微响。
+
+---
+
+## 十六、`hhxw_` — 混合相位 EQ
+
+### 职责
+
+**每段独立选择最小 / 线性 / 零相位**。
+
+### 处理链
+
+```
+输入 → EqCore (最小相位段) → LinearPhaseEq (线性相位段) → 输出
+```
+
+**所有最小相位段在前，所有线性相位段在后**——不是按频段交错。
+
+### 核心 API
+
+```c
+hhxw_set_band_phase_mode(h, 0, eqlib_phase_linear)
+hhxw_set_band_freq(h, 0, 1000.0)
+hhxw_set_band_gain(h, 0, 6.0)
+hhxw_set_linear_kernel_size(h, 512)
+hhxw_get_latency(h, &n)          // 所有线性相位段共享同一延迟
+hhxw_rebuild(h)
+hhxw_process(h, in, out, frames, channels)
+```
+
+### 3 种相位模式
+
+| 值 | 模式 | 行为 |
+|---|---|---|
+| 0 | `eqlib_phase_minimum` | 走最小相位链（低延迟，有相位失真） |
+| 1 | `eqlib_phase_linear` | 走线性相位链（无相位失真，有延迟） |
+| 2 | `eqlib_phase_zero` | **当前等同 minimum**（未实现真零相位） |
+
+### 什么时候用
+
+- 需要部分频段最小相位（低延迟）、部分线性相位（精确相位）
+
+### 坑
+
+- **`eqlib_phase_zero` 不生效**，实际按 minimum 处理。
+- **改参数后要 `hhxw_rebuild`**。
+- **整体延迟 = 线性相位核的延迟**，即使某些段是最小相位。
+
+---
+
+## 十七、`cy_` — 重采样
+
+### 职责
+
+**多相 FIR 重采样**，任意输入输出采样率比例。
+
+### 它做什么
+
+- 256 相位 FIR 核
+- Blackman 窗
+- 下采样时自动抗混叠（cutoff = out_rate / in_rate）
+- 流式处理，跨块保持历史
+
+### 核心 API
+
+```c
+cy_set_channels(h, 2)
+cy_set_input_rate(h, 44100.0)
+cy_set_output_rate(h, 48000.0)
+cy_set_quality(h, 64)             // taps: 8 ~ 128
+cy_get_latency(h, &n)             // = taps / 2
+cy_get_expected_output(h, in_frames, &out_frames)   // 预估输出帧数
+cy_process(h, in, in_frames, channels, out, out_capacity, &out_frames)
+```
+
+### 处理
+
+```c
+cy_process(h, in, in_frames, channels, out, out_capacity, &out_frames)
+```
+
+- `out_capacity` 不够返回 `eqlib_err_param`，**不写 `out_frames`**
+- 用 `cy_get_expected_output` 预估容量
+
+### 参数
+
+| 参数 | 范围 |
+|---|---|
+| 采样率 | 8000 ~ 384000 |
+| taps | 8 ~ 128 |
+| 延迟 | taps / 2 |
+
+### 什么时候用
+
+- 44.1k ↔ 48k ↔ 96k ↔ 192k 转换
+- 输入输出采样率不匹配
+
+### 坑
+
+- **改采样率会清空历史**（避免残留状态）。
+- **下采样必须做抗混叠**，库已自动处理。
+- **流式处理必须保持同一 `Resampler` 实例**，不能每次重新创建。
+
+---
+
+## 模块关系与调用顺序
+
+### 典型实时链
+
+```c
+// 输入
+ypdr_load_mp3(h, "in.mp3");
+
+// 1. 重采样到工作采样率
+cy_process(h, in, in_frames, ch, out, cap, &out_frames);
+
+// 2. 参数 EQ
+jhq_process(h, out, out, out_frames, ch);
+
+// 3. 动态多频段
+dsjhq_process(h, out, out, out_frames, ch);
+
+// 4. 中侧
+zc_process(h, out_l, out_r, out_l, out_r, frames);
+
+// 5. 饱和
+bh_process(h, out, out, frames, ch);
+
+// 6. AGC
+zdzy_process(h, out, out, frames, ch);
+
+// 输出
+wjdx_wav_open_write(h, "out.wav", sr, ch, eqlib_wav_float32);
+wjdx_wav_write_float(h, out, frames);
+wjdx_wav_finalize(h);
+wjdx_wav_close(h);
+```
+
+### 自动 EQ 链
+
+```c
+// 1. 设参考曲线
+zdjhq_set_reference_curve(h, freqs, gains, n);
+
+// 2. 开始分析
+zdjhq_start(h);
+
+// 3. 把音频喂给频谱分析
+for (each block) {
+    ppfx_process(h, in, frames, ch);
+}
+
+// 4. 把频谱喂给自动 EQ
+zdjhq_feed_spectrum(h);
+
+// 5. 计算结果
+zdjhq_compute_result(h);
+
+// 6. 取 7 段增益
+double gains[7];
+int n = 0;
+zdjhq_get_result(h, gains, &n);
+
+// 7. 应用到 jhq_
+for (int i = 0; i < 7; ++i) {
+    jhq_set_band_gain(h, i, gains[i]);
+}
+```
+
+---
+
+## 附录：模块选择速查
+
+| 需求 | 用哪个 |
+|---|---|
+| 7 段基础 EQ | `jhq_` |
+| 93 段精细 EQ | `dsjhq_` |
+| 动态多频段压缩 | `dsjhq_` |
+| 曲线注入 | `dsjhq_load_*_curve` |
+| 侧链动态 | `dtjhq_process_sidechain` |
+| 只算侧链增益 | `cl_` |
+| 立体声宽度 | `zc_` |
+| 频谱可视化 | `ppfx_` |
+| 自动房间校正 | `ppfx_` + `zdjhq_` |
+| 自动电平 | `zdzy_` |
+| 母带暖色 | `bh_` |
+| 线性相位 | `xxwjhq_` |
+| 混合相位 | `hhxw_` |
+| 多通道并行 | `dtd_` |
+| WAV 文件读写 | `wjdx_` |
+| WAV 内存读写 | `nccwj_` |
+| 加载 MP3 / FLAC | `ypdr_` |
+| 一条龙批处理 | `ypdc_` |
+| 重采样 | `cy_` |
+
+---
+
+这份文档放到 `docs/api.md` 或追加到 README 末尾。需要我写成单独文件、或者再补充某一模块的细节，告诉我。

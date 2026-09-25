@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <vector>
 
 namespace eqlib {
 
@@ -8,6 +9,7 @@ constexpr int    NUM_BANDS          = 7;
 constexpr int    MAX_BANDS          = 93;
 constexpr int    DEFAULT_BANDS      = 7;
 constexpr int    CURVE_MAX_POINTS   = 20001;
+constexpr int    AUTO_EQ_MAX_POINTS = 20001;
 constexpr double SR_MIN             = 32000.0;
 constexpr double SR_MAX             = 384000.0;
 constexpr double GAIN_MIN_DB        = -60.0;
@@ -17,19 +19,20 @@ constexpr double FREQ_MAX_HZ        = 20000.0;
 constexpr double Q_MIN              = 0.1;
 constexpr double Q_MAX              = 18.0;
 constexpr int    FFT_MAX_SIZE       = 8192;
-constexpr int    AUTO_EQ_MAX_POINTS = 512;
 constexpr int    WAV_MAX_CHANNELS   = 64;
 constexpr int    AUDIO_BLOCK_FRAMES = 4096;
 
-constexpr uint32_t PARAM_MASK_GAIN   = 1u << 0;
-constexpr uint32_t PARAM_MASK_TYPE   = 1u << 1;
-constexpr uint32_t PARAM_MASK_FREQ   = 1u << 2;
-constexpr uint32_t PARAM_MASK_Q      = 1u << 3;
-constexpr uint32_t PARAM_MASK_ENABLE = 1u << 4;
-constexpr uint32_t PARAM_MASK_TARGET = 1u << 5;
-constexpr uint32_t PARAM_MASK_RANGE  = 1u << 6;
-constexpr uint32_t PARAM_MASK_ATK    = 1u << 7;
-constexpr uint32_t PARAM_MASK_REL    = 1u << 8;
+constexpr uint32_t PARAM_MASK_GAIN    = 1u << 0;
+constexpr uint32_t PARAM_MASK_TYPE    = 1u << 1;
+constexpr uint32_t PARAM_MASK_FREQ    = 1u << 2;
+constexpr uint32_t PARAM_MASK_Q       = 1u << 3;
+constexpr uint32_t PARAM_MASK_ENABLE  = 1u << 4;
+constexpr uint32_t PARAM_MASK_TARGET  = 1u << 5;
+constexpr uint32_t PARAM_MASK_RANGE   = 1u << 6;
+constexpr uint32_t PARAM_MASK_ATK     = 1u << 7;
+constexpr uint32_t PARAM_MASK_REL     = 1u << 8;
+constexpr uint32_t PARAM_MASK_PERCENT = 1u << 9;
+constexpr uint32_t PARAM_MASK_MODE    = 1u << 10;
 
 enum class FilterType : int {
     Peaking = 0,
@@ -154,6 +157,8 @@ struct ParamChange {
     double   gain_db{0.0};
     double   q{0.0};
     int      enable{-1};
+    double   percent{0.0};
+    int      mode{-1};
     uint32_t mask{0};
 };
 
@@ -187,10 +192,17 @@ struct SpectrumConfig {
 };
 
 struct SpectrumFrame {
-    double magnitudes[FFT_MAX_SIZE / 2 + 1];
-    double freqs_hz[FFT_MAX_SIZE / 2 + 1];
-    int    num_bins;
-    double sample_rate;
+    std::vector<double> magnitudes;
+    std::vector<double> freqs_hz;
+    int    num_bins{0};
+    double sample_rate{48000.0};
+
+    void resize(int n) {
+        if (n < 0) n = 0;
+        magnitudes.resize(static_cast<std::size_t>(n));
+        freqs_hz.resize(static_cast<std::size_t>(n));
+        num_bins = n;
+    }
 };
 
 struct AgcParams {
@@ -234,13 +246,21 @@ struct AudioFileInfo {
 };
 
 struct CurveData {
-    double freqs_hz[CURVE_MAX_POINTS];
-    double levels_db[CURVE_MAX_POINTS];
-    double gains_db[CURVE_MAX_POINTS];
+    std::vector<double> freqs_hz;
+    std::vector<double> levels_db;
+    std::vector<double> gains_db;
     int    num_points{0};
     int    source{0};
     bool   is_measured{false};
     double reference_db{-18.0};
+
+    void resize(int n) {
+        if (n < 0) n = 0;
+        freqs_hz.resize(static_cast<std::size_t>(n));
+        levels_db.resize(static_cast<std::size_t>(n));
+        gains_db.resize(static_cast<std::size_t>(n));
+        num_points = n;
+    }
 };
 
 struct BandConfig {
@@ -255,6 +275,8 @@ struct BandConfig {
     double dyn_range_db{12.0};
     double dyn_attack_ms{10.0};
     double dyn_release_ms{200.0};
+    double dyn_percent{100.0};
+    int    dyn_mode{0};
 };
 
 struct BenchResult {

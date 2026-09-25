@@ -4,10 +4,13 @@
 namespace eqlib {
 
 EqCore::EqCore() {
+    static const double kDefaultFreqs[NUM_BANDS] = {
+        34.6, 122.5, 353.6, 1000.0, 2828.0, 5657.0, 12649.0
+    };
     for (int i = 0; i < MAX_BANDS; ++i) {
         m_filters[i].resize(m_channels);
         m_band_type[i] = FilterType::Peaking;
-        m_band_freq[i] = 1000.0;
+        m_band_freq[i] = (i < NUM_BANDS) ? kDefaultFreqs[i] : 1000.0;
         m_band_q[i] = 0.707;
         m_band_enable[i] = true;
         m_dirty[i] = true;

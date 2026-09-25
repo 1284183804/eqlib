@@ -115,9 +115,22 @@ int jhq_set_channels(eqlib_handle* h, int ch) {
     return eqlib_ok;
 }
 
+int jhq_set_num_bands(eqlib_handle* h, int n) {
+    if (!h) return eqlib_err_handle;
+    if (n < 1 || n > eqlib::MAX_BANDS) return eqlib_err_param;
+    h->core.setNumBands(n);
+    return eqlib_ok;
+}
+
+int jhq_get_num_bands(eqlib_handle* h, int* out) {
+    if (!h || !out) return eqlib_err_param;
+    *out = h->core.getNumBands();
+    return eqlib_ok;
+}
+
 int jhq_set_band_type(eqlib_handle* h, int band, int type) {
     if (!h) return eqlib_err_handle;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     if (type < 0 || type > 7) return eqlib_err_param;
     h->core.setBandType(band, static_cast<eqlib::FilterType>(type));
     return eqlib_ok;
@@ -125,15 +138,31 @@ int jhq_set_band_type(eqlib_handle* h, int band, int type) {
 
 int jhq_set_band_freq(eqlib_handle* h, int band, double freq_hz) {
     if (!h) return eqlib_err_handle;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     if (freq_hz < eqlib::FREQ_MIN_HZ || freq_hz > eqlib::FREQ_MAX_HZ) return eqlib_err_param;
     h->core.setBandFreq(band, freq_hz);
     return eqlib_ok;
 }
 
+int jhq_set_band_freqs(eqlib_handle* h, const double* freqs_hz, int n) {
+    if (!h) return eqlib_err_handle;
+    if (!freqs_hz) return eqlib_err_param;
+    if (n < 1 || n > eqlib::MAX_BANDS) return eqlib_err_param;
+    for (int i = 0; i < n; ++i) {
+        if (freqs_hz[i] < eqlib::FREQ_MIN_HZ || freqs_hz[i] > eqlib::FREQ_MAX_HZ) {
+            return eqlib_err_param;
+        }
+    }
+    h->core.setNumBands(n);
+    for (int i = 0; i < n; ++i) {
+        h->core.setBandFreq(i, freqs_hz[i]);
+    }
+    return eqlib_ok;
+}
+
 int jhq_set_band_gain(eqlib_handle* h, int band, double gain_db) {
     if (!h) return eqlib_err_handle;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     if (gain_db < eqlib::GAIN_MIN_DB || gain_db > eqlib::GAIN_MAX_DB) return eqlib_err_param;
     h->core.setBandGain(band, gain_db);
     return eqlib_ok;
@@ -141,7 +170,7 @@ int jhq_set_band_gain(eqlib_handle* h, int band, double gain_db) {
 
 int jhq_set_band_q(eqlib_handle* h, int band, double q) {
     if (!h) return eqlib_err_handle;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     if (q < eqlib::Q_MIN || q > eqlib::Q_MAX) return eqlib_err_param;
     h->core.setBandQ(band, q);
     return eqlib_ok;
@@ -149,7 +178,7 @@ int jhq_set_band_q(eqlib_handle* h, int band, double q) {
 
 int jhq_set_band_enable(eqlib_handle* h, int band, int enable) {
     if (!h) return eqlib_err_handle;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     h->core.setBandEnable(band, enable != 0);
     return eqlib_ok;
 }
@@ -172,42 +201,42 @@ int jhq_process_double(eqlib_handle* h, const double* in, double* out, int frame
 
 int jhq_get_band_gain(eqlib_handle* h, int band, double* out) {
     if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     *out = h->core.getBandGain(band);
     return eqlib_ok;
 }
 
 int jhq_get_band_type(eqlib_handle* h, int band, int* out) {
     if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     *out = static_cast<int>(h->core.getBandType(band));
     return eqlib_ok;
 }
 
 int jhq_get_band_freq(eqlib_handle* h, int band, double* out) {
     if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     *out = h->core.getBandFreq(band);
     return eqlib_ok;
 }
 
 int jhq_get_band_q(eqlib_handle* h, int band, double* out) {
     if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     *out = h->core.getBandQ(band);
     return eqlib_ok;
 }
 
 int jhq_get_band_enable(eqlib_handle* h, int band, int* out) {
     if (!h || !out) return eqlib_err_param;
-    if (band < 0 || band >= eqlib::NUM_BANDS) return eqlib_err_param;
+    if (band < 0 || band >= eqlib::MAX_BANDS) return eqlib_err_param;
     *out = h->core.getBandEnable(band) ? 1 : 0;
     return eqlib_ok;
 }
 
 int jhq_get_version(char* buf, int buf_size) {
     if (!buf || buf_size <= 0) return eqlib_err_param;
-    const char* ver = "eqlib 1.0.0";
+    const char* ver = "eqlib 1.0.1";
     int len = 0;
     while (ver[len] && len < buf_size - 1) { buf[len] = ver[len]; ++len; }
     buf[len] = '\0';

@@ -24,8 +24,11 @@ public:
     void reset();
     void clearAll();
 
+    void setNumBands(int n);
+    int getNumBands() const;
     void setBandType(int band, int type);
     void setBandFreq(int band, double freq_hz);
+    void setBandFreqs(const double* freqs_hz, int n);
     void setBandGain(int band, double gain_db);
     void setBandQ(int band, double q);
     void setBandEnable(int band, bool enable);
@@ -37,6 +40,7 @@ public:
 
     void setDynThreshold(int band, double threshold_db);
     void setDynRatio(int band, double ratio);
+    void setDynPercent(int band, double percent);
     void setDynAttack(int band, double attack_ms);
     void setDynRelease(int band, double release_ms);
     void setDynRange(int band, double range_db);

@@ -86,6 +86,18 @@ void EQ::clearAll() {
     m_impl->last_error = jhq_clear_all(m_impl->handle);
 }
 
+void EQ::setNumBands(int n) {
+    if (!isValid()) return;
+    m_impl->last_error = jhq_set_num_bands(m_impl->handle, n);
+}
+
+int EQ::getNumBands() const {
+    if (!isValid()) return 0;
+    int out = 0;
+    jhq_get_num_bands(m_impl->handle, &out);
+    return out;
+}
+
 void EQ::setBandType(int band, int type) {
     if (!isValid()) return;
     m_impl->last_error = jhq_set_band_type(m_impl->handle, band, type);
@@ -94,6 +106,11 @@ void EQ::setBandType(int band, int type) {
 void EQ::setBandFreq(int band, double freq_hz) {
     if (!isValid()) return;
     m_impl->last_error = jhq_set_band_freq(m_impl->handle, band, freq_hz);
+}
+
+void EQ::setBandFreqs(const double* freqs_hz, int n) {
+    if (!isValid()) return;
+    m_impl->last_error = jhq_set_band_freqs(m_impl->handle, freqs_hz, n);
 }
 
 void EQ::setBandGain(int band, double gain_db) {
@@ -154,6 +171,11 @@ void EQ::setDynThreshold(int band, double threshold_db) {
 void EQ::setDynRatio(int band, double ratio) {
     if (!isValid()) return;
     m_impl->last_error = dtjhq_set_band_ratio(m_impl->handle, band, ratio);
+}
+
+void EQ::setDynPercent(int band, double percent) {
+    if (!isValid()) return;
+    m_impl->last_error = dtjhq_set_band_percent(m_impl->handle, band, percent);
 }
 
 void EQ::setDynAttack(int band, double attack_ms) {
